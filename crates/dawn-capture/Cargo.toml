@@ -1,0 +1,11 @@
+[package]
+name = "dawn-capture"
+description = "Second Dawn screen capture and area selection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+# Takes the screenshots (all monitors) on Windows, macOS and Linux. Used only when capturing.
+xcap = { version = "0.7", default-features = false }

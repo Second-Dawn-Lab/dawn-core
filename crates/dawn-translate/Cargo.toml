@@ -1,0 +1,27 @@
+[package]
+name = "dawn-translate"
+description = "Second Dawn translation engines behind one trait"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dawn-models = { path = "../dawn-models" }
+# CPU-only CTranslate2. `sentencepiece` is the tokenizer Marian/Opus-MT models need.
+ct2rs = { version = "0.10", default-features = false, features = ["sentencepiece"] }
+# Small statistical language detector, no model download.
+whatlang = "0.16"
+
+# The int8 matrix-multiply backend CTranslate2 is built with depends on the CPU architecture,
+# so builds work on every platform without flags:
+#   x86-64:  oneDNN ("dnnl"), built from source; about 4-5x faster than ruy (see docs/performance.md)
+#   others:  ruy (ARM, Apple Silicon), small and fast on those CPUs
+# To force ruy on x86-64 (for example if oneDNN does not build), change the two `features` below.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+ct2rs = { version = "0.10", default-features = false, features = ["dnnl"] }
+
+[target.'cfg(not(target_arch = "x86_64"))'.dependencies]
+ct2rs = { version = "0.10", default-features = false, features = ["ruy"] }

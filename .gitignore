@@ -1,0 +1,35 @@
+node_modules/
+target/
+dist/
+*.log
+
+
+# Model weights must never be committed
+models/**/*.bin
+models/**/*.onnx
+models/**/*.gguf
+models/cache/
+
+# Converted model output and the conversion virtualenv: never committed
+tools/convert-models/out/
+tools/convert-models/.venv/
+
+# Extra cargo target folders (e.g. the oneDNN experiment)
+target-*/
+
+# Secrets, certificates and keys
+.env
+.env.*
+*.pfx
+*.pem
+*.key
+*.p12
+
+# Binaries and archives (only brand PNGs and generated app icons are committed)
+*.exe
+*.dll
+*.msi
+*.zip
+*.tar.gz
+*.7z
+*.safetensors

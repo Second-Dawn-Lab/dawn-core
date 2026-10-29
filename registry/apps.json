@@ -1,0 +1,12 @@
+{
+  "apps": [
+    {
+      "id": "owll",
+      "name": "Owl-L",
+      "description": "Offline, lightweight translator.",
+      "status": "in-development",
+      "repo": "https://github.com/Second-Dawn-Lab/owll",
+      "license": "MIT"
+    }
+  ]
+}

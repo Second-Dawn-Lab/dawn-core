@@ -1,0 +1,13 @@
+{
+  "name": "@seconddawn/updater",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Second Dawn update client (talks to Nest)",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

@@ -1,0 +1,6 @@
+ctranslate2>=4.5,<5
+transformers>=4.44,<5
+huggingface_hub>=0.24
+sentencepiece>=0.2
+# CPU build is enough for conversion (install from https://download.pytorch.org/whl/cpu to save space).
+torch>=2.2

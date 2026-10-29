@@ -1,0 +1,435 @@
+{
+  "version": 2,
+  "hub": "en",
+  "models": [
+    {
+      "id": "opus-mt-ar-en-ct2-int8",
+      "sources": [
+        "ar"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-ar-en-ct2-int8.zip",
+      "sizeBytes": 67349463,
+      "sha256": "8d998baf8934900f9ace7fd09ef81db2e99ca3c4e946879ed92095ae101986a9",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-de-en-ct2-int8",
+      "sources": [
+        "de"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-de-en-ct2-int8.zip",
+      "sizeBytes": 66517733,
+      "sha256": "076877cba9629fe7e1e34c68ab15d373d3fd44e74b5a4c5e074c15f7417a7dbb",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-ar-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "ar"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-ar-ct2-int8.zip",
+      "sizeBytes": 67278265,
+      "sha256": "a0b38601ba7e8ae3534db0776e64337ff9ead2cfa0dbced2fc1883703c767c4f",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT",
+      "prefix": ">>ara<<"
+    },
+    {
+      "id": "opus-mt-en-de-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "de"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-de-ct2-int8.zip",
+      "sizeBytes": 62910771,
+      "sha256": "d47a029da7554b93648320fcecd3c3f03482764dce444421d32c0d43e06fdbc6",
+      "license": "CC-BY-4.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-es-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "es"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-es-ct2-int8.zip",
+      "sizeBytes": 68614468,
+      "sha256": "ca5eaf044b47e1b811be1ff813d52d9fe6f2db4458fbf886855038d2d12028f1",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-fr-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "fr"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-fr-ct2-int8.zip",
+      "sizeBytes": 62400825,
+      "sha256": "7ce0090b91667a4b1a1b60a942265509d6c3af6340de89ad3d76c20c718a3287",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-it-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "it"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-it-ct2-int8.zip",
+      "sizeBytes": 69751346,
+      "sha256": "946abcc423f6196a0d793d194d9b5ecb62442b06f917acecbadc7ccc4692dbc2",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-ru-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "ru"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-ru-ct2-int8.zip",
+      "sizeBytes": 69624482,
+      "sha256": "ef4e4e91150fa15173ce3eca717cf1724e83e68397cbdf6185b945ad3b1010d0",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-tr-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "tr"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-tr-ct2-int8.zip",
+      "sizeBytes": 218551109,
+      "sha256": "30e0b3552b08cef5864b43ffbfe50d286886e264dd4d4ebbd68792f6b9b5c399",
+      "license": "CC-BY-4.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-en-zh-ct2-int8",
+      "sources": [
+        "en"
+      ],
+      "targets": [
+        "zh"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-en-zh-ct2-int8.zip",
+      "sizeBytes": 71072458,
+      "sha256": "44cb14586160b847d0999fd161d032f505bd9c50fb17c58348ec9fe7f39c40a0",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT",
+      "prefix": ">>cmn_Hans<<"
+    },
+    {
+      "id": "opus-mt-es-en-ct2-int8",
+      "sources": [
+        "es"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-es-en-ct2-int8.zip",
+      "sizeBytes": 67783221,
+      "sha256": "0c73bd6c58b98a8bb8510a39c6c68b92399ee98f8b216ddae96bc2f0d570bf97",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-fr-en-ct2-int8",
+      "sources": [
+        "fr"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-fr-en-ct2-int8.zip",
+      "sizeBytes": 63481272,
+      "sha256": "a55146c4ec0581c537207659e850987297a69a07372d9c48739b6355fb8c750a",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-it-en-ct2-int8",
+      "sources": [
+        "it"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-it-en-ct2-int8.zip",
+      "sizeBytes": 69539677,
+      "sha256": "9daca18dabf48bf2b2057b822a555d5c192895b744b9713fd91cdc1429d3ed63",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-ja-en-ct2-int8",
+      "sources": [
+        "ja"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-ja-en-ct2-int8.zip",
+      "sizeBytes": 64740187,
+      "sha256": "7ea71364fdf7625d342cc5049837fe7aa012a75492c0a6f8ecc8a06250d8c1dd",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-ru-en-ct2-int8",
+      "sources": [
+        "ru"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-ru-en-ct2-int8.zip",
+      "sizeBytes": 67526563,
+      "sha256": "5cb23afb5c89c7d9698b99722d4b8a787eb39cbbc665750b90601e89103bcab0",
+      "license": "CC-BY-4.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-tc-bible-big-inc-ct2-int8",
+      "sources": [
+        "en",
+        "de",
+        "fr",
+        "es",
+        "pt"
+      ],
+      "targets": [
+        "ur",
+        "hi",
+        "pa",
+        "bn"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-tc-bible-big-inc-ct2-int8.zip",
+      "sizeBytes": 221528262,
+      "sha256": "ea703c9b94eebc4fb64888376b38e3eb892db1822e7703bbcb615c0141c0188a",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT",
+      "targetTokens": {
+        "ur": ">>urd<<",
+        "hi": ">>hin<<",
+        "pa": ">>pan<<",
+        "bn": ">>ben<<"
+      }
+    },
+    {
+      "id": "opus-mt-tc-bible-big-inc-en-ct2-int8",
+      "sources": [
+        "ur",
+        "hi",
+        "pa",
+        "bn"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-tc-bible-big-inc-en-ct2-int8.zip",
+      "sizeBytes": 223290924,
+      "sha256": "2835ed94649e6ad497ea6b8f5658a719876f5f0d87e126aab6029bb8e5ba200a",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-tc-bible-big-mul-ct2-int8",
+      "sources": [
+        "en",
+        "de",
+        "fr",
+        "es",
+        "pt"
+      ],
+      "targets": [
+        "ja"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-tc-bible-big-mul-ct2-int8.zip",
+      "sizeBytes": 219934425,
+      "sha256": "2355a652707e9f979e70b87f0d534e00f4a8932625e03423d2209f6bc40604db",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT",
+      "targetTokens": {
+        "ja": ">>jpn<<"
+      }
+    },
+    {
+      "id": "opus-mt-tr-en-ct2-int8",
+      "sources": [
+        "tr"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-tr-en-ct2-int8.zip",
+      "sizeBytes": 69604456,
+      "sha256": "b648123ab21ce7d91571617769f536c9fa44bb1ff76f6bc07a2a864aed8f1944",
+      "license": "Apache-2.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    },
+    {
+      "id": "opus-mt-zh-en-ct2-int8",
+      "sources": [
+        "zh"
+      ],
+      "targets": [
+        "en"
+      ],
+      "url": "file:///path/to/dawn-core/tools/convert-models/out/opus-mt-zh-en-ct2-int8.zip",
+      "sizeBytes": 70737031,
+      "sha256": "1b8522dc3dc578654b58c661d5b6ae249c7c36200b863e1d64859ef8565050fd",
+      "license": "CC-BY-4.0",
+      "attribution": "Helsinki-NLP / OPUS-MT"
+    }
+  ],
+  "languages": [
+    {
+      "code": "ar",
+      "name": "Arabic",
+      "nativeName": "العربية",
+      "models": [
+        "opus-mt-en-ar-ct2-int8",
+        "opus-mt-ar-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "bn",
+      "name": "Bengali",
+      "nativeName": "বাংলা",
+      "beta": true,
+      "models": [
+        "opus-mt-tc-bible-big-inc-ct2-int8",
+        "opus-mt-tc-bible-big-inc-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "de",
+      "name": "German",
+      "nativeName": "Deutsch",
+      "models": [
+        "opus-mt-en-de-ct2-int8",
+        "opus-mt-de-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "es",
+      "name": "Spanish",
+      "nativeName": "Español",
+      "models": [
+        "opus-mt-en-es-ct2-int8",
+        "opus-mt-es-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "fr",
+      "name": "French",
+      "nativeName": "Français",
+      "models": [
+        "opus-mt-en-fr-ct2-int8",
+        "opus-mt-fr-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "hi",
+      "name": "Hindi",
+      "nativeName": "हिन्दी",
+      "beta": true,
+      "models": [
+        "opus-mt-tc-bible-big-inc-ct2-int8",
+        "opus-mt-tc-bible-big-inc-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "it",
+      "name": "Italian",
+      "nativeName": "Italiano",
+      "models": [
+        "opus-mt-en-it-ct2-int8",
+        "opus-mt-it-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "ja",
+      "name": "Japanese",
+      "nativeName": "日本語",
+      "beta": true,
+      "models": [
+        "opus-mt-tc-bible-big-mul-ct2-int8",
+        "opus-mt-ja-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "pa",
+      "name": "Punjabi",
+      "nativeName": "ਪੰਜਾਬੀ",
+      "beta": true,
+      "models": [
+        "opus-mt-tc-bible-big-inc-ct2-int8",
+        "opus-mt-tc-bible-big-inc-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "ru",
+      "name": "Russian",
+      "nativeName": "Русский",
+      "models": [
+        "opus-mt-en-ru-ct2-int8",
+        "opus-mt-ru-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "tr",
+      "name": "Turkish",
+      "nativeName": "Türkçe",
+      "models": [
+        "opus-mt-en-tr-ct2-int8",
+        "opus-mt-tr-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "ur",
+      "name": "Urdu",
+      "nativeName": "اردو",
+      "beta": true,
+      "models": [
+        "opus-mt-tc-bible-big-inc-ct2-int8",
+        "opus-mt-tc-bible-big-inc-en-ct2-int8"
+      ]
+    },
+    {
+      "code": "zh",
+      "name": "Chinese",
+      "nativeName": "中文",
+      "models": [
+        "opus-mt-en-zh-ct2-int8",
+        "opus-mt-zh-en-ct2-int8"
+      ]
+    }
+  ]
+}

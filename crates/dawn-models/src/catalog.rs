@@ -1,0 +1,225 @@
+//! `models/catalog.json`: the models Second Dawn apps can install and the languages built from them.
+//!
+//! English is the hub. A model serves some source languages and some target languages
+//! (`sources` x `targets`); a plain Opus-MT model serves one pair, a multilingual one many.
+//! A language lists the models it needs, and several languages can list the same model: it is
+//! downloaded once and kept as long as any installed language needs it.
+
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Catalog {
+    pub version: u32,
+    pub hub: String,
+    pub models: Vec<Model>,
+    pub languages: Vec<Language>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Language {
+    pub code: String,
+    pub name: String,
+    pub native_name: String,
+    /// Translation quality is known to be unreliable; the UI shows a "Beta" badge.
+    #[serde(default)]
+    pub beta: bool,
+    /// Ids of the models this language needs. It counts as installed when all of them are.
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Model {
+    pub id: String,
+    /// Languages the model reads.
+    pub sources: Vec<String>,
+    /// Languages the model writes.
+    pub targets: Vec<String>,
+    /// `https://` or `file://`.
+    pub url: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub license: String,
+    pub attribution: String,
+    /// Token put in front of every source sentence of a single-target model, e.g. `>>ara<<`.
+    #[serde(default)]
+    pub prefix: Option<String>,
+    /// For models with several targets: the token that selects each one, e.g. `"ur": ">>urd<<"`.
+    #[serde(default)]
+    pub target_tokens: BTreeMap<String, String>,
+}
+
+impl Model {
+    /// Can this model translate `from -> to`?
+    pub fn serves(&self, from: &str, to: &str) -> bool {
+        from != to && self.sources.iter().any(|s| s == from) && self.targets.iter().any(|t| t == to)
+    }
+
+    /// The language token to put in front of source sentences when translating into `to`.
+    pub fn target_token(&self, to: &str) -> Option<&str> {
+        self.target_tokens.get(to).map(String::as_str).or(self.prefix.as_deref())
+    }
+
+    /// How many directions it covers; a smaller number means a more specialized model.
+    pub fn breadth(&self) -> usize {
+        self.sources.len() * self.targets.len()
+    }
+}
+
+impl Default for Catalog {
+    fn default() -> Self {
+        Self { version: 2, hub: "en".into(), models: vec![], languages: vec![] }
+    }
+}
+
+impl Catalog {
+    /// The catalog shipped with the app (`models/catalog.json`).
+    pub fn bundled() -> Self {
+        Self::from_json(include_str!("../../../models/catalog.json")).unwrap_or_default()
+    }
+
+    pub fn from_json(json: &str) -> serde_json::Result<Self> {
+        serde_json::from_str(json)
+    }
+
+    pub fn language(&self, code: &str) -> Option<&Language> {
+        self.languages.iter().find(|l| l.code == code)
+    }
+
+    pub fn model(&self, id: &str) -> Option<&Model> {
+        self.models.iter().find(|m| m.id == id)
+    }
+
+    /// The models a language needs (ids that are not in the catalog are skipped).
+    pub fn language_models(&self, code: &str) -> Vec<&Model> {
+        self.language(code).map(|l| l.models.iter().filter_map(|id| self.model(id)).collect()).unwrap_or_default()
+    }
+
+    /// Models that can translate `from -> to`, most specialized first.
+    pub fn models_serving(&self, from: &str, to: &str) -> Vec<&Model> {
+        let mut found: Vec<&Model> = self.models.iter().filter(|m| m.serves(from, to)).collect();
+        found.sort_by_key(|m| m.breadth());
+        found
+    }
+
+    /// The first language that lists this model (used to name what to repair).
+    pub fn language_for_model(&self, id: &str) -> Option<&Language> {
+        self.languages.iter().find(|l| l.models.iter().any(|m| m == id))
+    }
+
+    /// Download size of all of a language's models, ignoring what is already installed.
+    pub fn total_size(&self, code: &str) -> u64 {
+        self.language_models(code).iter().map(|m| m.size_bytes).sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE: &str = r#"{
+      "version": 2, "hub": "en",
+      "models": [
+        { "id": "en-de", "sources": ["en"], "targets": ["de"], "url": "file:///x/en-de.zip",
+          "sizeBytes": 100, "sha256": "aa", "license": "CC-BY-4.0", "attribution": "Helsinki-NLP / OPUS-MT" },
+        { "id": "de-en", "sources": ["de"], "targets": ["en"], "url": "https://example.org/de-en.zip",
+          "sizeBytes": 50, "sha256": "bb", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT" },
+        { "id": "inc", "sources": ["en", "de"], "targets": ["ur", "hi"], "url": "file:///x/inc.zip",
+          "sizeBytes": 250, "sha256": "cc", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT",
+          "targetTokens": { "ur": ">>urd<<", "hi": ">>hin<<" } },
+        { "id": "inc-en", "sources": ["ur", "hi"], "targets": ["en"], "url": "file:///x/inc-en.zip",
+          "sizeBytes": 250, "sha256": "dd", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT" }
+      ],
+      "languages": [
+        { "code": "de", "name": "German", "nativeName": "Deutsch", "models": ["en-de", "de-en"] },
+        { "code": "ur", "name": "Urdu", "nativeName": "اردو", "beta": true, "models": ["inc", "inc-en"] },
+        { "code": "hi", "name": "Hindi", "nativeName": "हिन्दी", "beta": true, "models": ["inc", "inc-en"] }
+      ]
+    }"#;
+
+    #[test]
+    fn parses_shared_model_catalog() {
+        let catalog = Catalog::from_json(SAMPLE).unwrap();
+        assert_eq!(catalog.hub, "en");
+        assert_eq!(catalog.language("de").unwrap().native_name, "Deutsch");
+        assert_eq!(catalog.total_size("de"), 150);
+        // Urdu and Hindi list the same two models.
+        assert_eq!(catalog.language("ur").unwrap().models, catalog.language("hi").unwrap().models);
+        assert_eq!(catalog.total_size("ur"), 500);
+        assert!(!catalog.language("de").unwrap().beta);
+        assert!(catalog.language("ur").unwrap().beta);
+    }
+
+    #[test]
+    fn models_serve_every_pair_of_their_sources_and_targets() {
+        let catalog = Catalog::from_json(SAMPLE).unwrap();
+        let inc = catalog.model("inc").unwrap();
+        for (from, to) in [("en", "ur"), ("de", "ur"), ("en", "hi"), ("de", "hi")] {
+            assert!(inc.serves(from, to), "{from}->{to}");
+        }
+        assert!(!inc.serves("ur", "en"));
+        assert!(!inc.serves("en", "en"));
+        assert!(!inc.serves("fr", "ur"));
+    }
+
+    #[test]
+    fn finds_models_by_direction_most_specialized_first() {
+        let catalog = Catalog::from_json(SAMPLE).unwrap();
+        assert_eq!(catalog.models_serving("de", "ur").iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["inc"]);
+        assert_eq!(catalog.models_serving("en", "de")[0].id, "en-de");
+        assert!(catalog.models_serving("de", "fr").is_empty());
+    }
+
+    #[test]
+    fn target_tokens_pick_the_language_and_fall_back_to_the_prefix() {
+        let catalog = Catalog::from_json(SAMPLE).unwrap();
+        let inc = catalog.model("inc").unwrap();
+        assert_eq!(inc.target_token("ur"), Some(">>urd<<"));
+        assert_eq!(inc.target_token("hi"), Some(">>hin<<"));
+        assert_eq!(catalog.model("en-de").unwrap().target_token("de"), None);
+
+        let single = Model { prefix: Some(">>ara<<".into()), ..catalog.model("en-de").unwrap().clone() };
+        assert_eq!(single.target_token("ar"), Some(">>ara<<"));
+    }
+
+    #[test]
+    fn names_the_language_to_repair_for_a_model() {
+        let catalog = Catalog::from_json(SAMPLE).unwrap();
+        assert_eq!(catalog.language_for_model("de-en").unwrap().code, "de");
+        assert_eq!(catalog.language_for_model("inc").unwrap().code, "ur");
+        assert!(catalog.language_for_model("nope").is_none());
+    }
+
+    #[test]
+    fn bundled_catalog_is_consistent() {
+        let catalog = Catalog::from_json(include_str!("../../../models/catalog.json")).unwrap();
+        assert_eq!(catalog.hub, "en");
+        for lang in &catalog.languages {
+            assert!(!lang.models.is_empty(), "{} has no models", lang.code);
+            for id in &lang.models {
+                assert!(catalog.model(id).is_some(), "{} lists unknown model {id}", lang.code);
+            }
+            // Every language can be translated to and from English.
+            assert!(!catalog.models_serving("en", &lang.code).is_empty(), "nothing translates en->{}", lang.code);
+            assert!(!catalog.models_serving(&lang.code, "en").is_empty(), "nothing translates {}->en", lang.code);
+        }
+        for m in &catalog.models {
+            assert!(!m.sources.is_empty() && !m.targets.is_empty(), "{} serves nothing", m.id);
+        }
+    }
+
+    #[test]
+    fn urdu_japanese_and_the_indo_aryan_languages_are_beta() {
+        let catalog = Catalog::bundled();
+        for code in ["ur", "ja", "hi", "pa", "bn"] {
+            assert!(catalog.language(code).is_some_and(|l| l.beta), "{code} should be beta");
+        }
+        for code in ["de", "fr", "es"] {
+            assert!(catalog.language(code).is_some_and(|l| !l.beta), "{code} should not be beta");
+        }
+    }
+}

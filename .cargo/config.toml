@@ -1,0 +1,3 @@
+# CTranslate2 (via ct2rs) is built from source and needs the static CRT on Windows.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

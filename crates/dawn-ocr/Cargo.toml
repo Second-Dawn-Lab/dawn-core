@@ -1,0 +1,26 @@
+[package]
+name = "dawn-ocr"
+description = "Second Dawn OCR engines behind one trait"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+
+# Windows' built-in OCR (Windows.Media.Ocr): no model download, languages come from the OS.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Globalization",
+  "Graphics_Imaging",
+  "Media_Ocr",
+  "Storage_Streams",
+  "Win32_System_Com",
+]
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+dawn-capture = { path = "../dawn-capture" }

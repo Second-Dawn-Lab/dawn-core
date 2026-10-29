@@ -1,0 +1,16 @@
+[package]
+name = "dawn-models"
+description = "Second Dawn model catalog, download manager and shared model store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dawn-core = { path = "../dawn-core" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+# Model archives are zips; deflate only, no encryption/bzip2/zstd.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Blocking HTTP client with rustls and proxy support. This crate is the only one that touches the network.
+ureq = { version = "2", features = ["tls"] }

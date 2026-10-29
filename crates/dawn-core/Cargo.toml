@@ -1,0 +1,10 @@
+[package]
+name = "dawn-core"
+description = "Second Dawn shared paths, config and logging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
