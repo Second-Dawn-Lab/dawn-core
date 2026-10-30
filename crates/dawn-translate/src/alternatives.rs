@@ -123,6 +123,26 @@ pub fn clean_candidates(candidates: Vec<Candidate>, current_word: &str, sentence
     list
 }
 
+/// Whole-sentence alternatives: the model's n-best translations without the current one, repeats, empty
+/// ones and ones that only differ in case, spacing or punctuation. The input order (best first) is kept.
+pub fn dedupe_sentences(candidates: Vec<String>, current: &str, count: usize) -> Vec<String> {
+    let mut seen = vec![word_key(current)];
+    let mut out = Vec::new();
+    for text in candidates {
+        let text = text.trim().to_string();
+        let key = word_key(&text);
+        if key.is_empty() || seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        out.push(text);
+        if out.len() >= count {
+            break;
+        }
+    }
+    out
+}
+
 /// The pieces that come before the word starting at byte `word_start` of the sentence. `spans` are the
 /// byte ranges the pieces cover in the sentence (what SentencePiece reports). A piece is in the prefix when
 /// it ends at or before the word: whatever it is (a whole word, one piece of a long word, punctuation). The
@@ -218,6 +238,22 @@ mod tests {
         assert!(long.ends_with('\u{2026}'), "{long}");
         assert!(long.starts_with("sprachlos, weil sie so lange"), "{long}");
         assert!(long.chars().count() <= 36);
+    }
+
+    #[test]
+    fn sentence_alternatives_drop_the_current_one_repeats_and_near_duplicates() {
+        let n = vec![
+            "Ich bin erstaunt.".to_string(),
+            "Ich bin \u{fc}berrascht.".to_string(),
+            "ich bin ERSTAUNT".to_string(),
+            "Ich bin \u{fc}berrascht!".to_string(),
+            " ".to_string(),
+            "Ich bin verbl\u{fc}fft.".to_string(),
+            "Ich staune.".to_string(),
+            "Mich wundert das.".to_string(),
+        ];
+        let out = dedupe_sentences(n, "Ich bin erstaunt.", 3);
+        assert_eq!(out, vec!["Ich bin \u{fc}berrascht.", "Ich bin verbl\u{fc}fft.", "Ich staune."]);
     }
 
     #[test]

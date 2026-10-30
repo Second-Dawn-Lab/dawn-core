@@ -190,11 +190,13 @@ pub struct Protected {
     pub inline: String,
     /// `(placeholder, target term)` in sentence order.
     pub terms: Vec<(String, String)>,
+    /// The text of the sentence each term replaced, in the same order ("astonished").
+    pub sources: Vec<String>,
 }
 
 impl Protected {
     pub fn unchanged(text: &str) -> Self {
-        Self { text: text.to_string(), inline: text.to_string(), terms: Vec::new() }
+        Self { text: text.to_string(), inline: text.to_string(), terms: Vec::new(), sources: Vec::new() }
     }
 
     /// Do all target terms appear in `output` (ignoring case)? Used to accept the inline form.
@@ -266,6 +268,25 @@ fn find_matches(chars: &[char], entries: &[&GlossaryEntry]) -> Vec<Match> {
     found
 }
 
+/// What the glossary does to `sentence`: a fingerprint of the entries that match it (their terms, targets
+/// and options). A translation or a pinned choice made under one fingerprint is not valid under another,
+/// so adding, editing, disabling or switching a term re-translates the sentences it touches and no others.
+/// 0 means the glossary does nothing here.
+pub fn signature(sentence: &str, entries: &[&GlossaryEntry]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let chars: Vec<char> = sentence.chars().collect();
+    let matches = find_matches(&chars, entries);
+    if matches.is_empty() {
+        return 0;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for m in &matches {
+        let e = entries[m.entry];
+        (m.start, &e.source, &e.target, e.match_case, e.whole_word).hash(&mut hasher);
+    }
+    hasher.finish().max(1)
+}
+
 /// Replace every glossary term in `sentence` by a placeholder.
 pub fn protect(sentence: &str, entries: &[&GlossaryEntry]) -> Protected {
     if entries.is_empty() {
@@ -279,10 +300,12 @@ pub fn protect(sentence: &str, entries: &[&GlossaryEntry]) -> Protected {
     let mut text = String::with_capacity(sentence.len());
     let mut inline = String::with_capacity(sentence.len());
     let mut terms = Vec::new();
+    let mut sources = Vec::new();
     let mut cursor = 0;
     for (n, m) in matches.iter().enumerate() {
         text.extend(&chars[cursor..m.start]);
         inline.extend(&chars[cursor..m.start]);
+        sources.push(chars[m.start..m.end].iter().collect::<String>());
         let token = placeholder(n + 1);
         let target = entries[m.entry].target.trim().to_string();
         text.push_str(&token);
@@ -292,7 +315,43 @@ pub fn protect(sentence: &str, entries: &[&GlossaryEntry]) -> Protected {
     }
     text.extend(&chars[cursor..]);
     inline.extend(&chars[cursor..]);
-    Protected { text, inline, terms }
+    Protected { text, inline, terms, sources }
+}
+
+/// The byte range of the first case-insensitive occurrence of `needle` in `hay`.
+fn find_ignoring_case(hay: &str, needle: &str) -> Option<(usize, usize)> {
+    let needle: Vec<char> = needle.chars().collect();
+    if needle.is_empty() {
+        return None;
+    }
+    let hay_chars: Vec<(usize, char)> = hay.char_indices().collect();
+    'start: for i in 0..hay_chars.len() {
+        if i + needle.len() > hay_chars.len() {
+            return None;
+        }
+        for (k, c) in needle.iter().enumerate() {
+            if !chars_equal(hay_chars[i + k].1, *c, false) {
+                continue 'start;
+            }
+        }
+        let end = hay_chars.get(i + needle.len()).map_or(hay.len(), |(b, _)| *b);
+        return Some((hay_chars[i].0, end));
+    }
+    None
+}
+
+/// The inline form lets the model keep the target term, but a model capitalizes a word it takes for a name
+/// ("Xsdcv"). A glossary term is inserted as written, so each target found in `output` is rewritten exactly.
+pub fn exact_terms(output: &str, protected: &Protected) -> String {
+    let mut text = output.to_string();
+    let mut from = 0;
+    for (_, target) in &protected.terms {
+        if let Some((start, end)) = find_ignoring_case(&text[from..], target) {
+            text.replace_range(from + start..from + end, target);
+            from += start + target.len();
+        }
+    }
+    text
 }
 
 /// Put the target terms where the placeholders came back.
@@ -378,6 +437,35 @@ mod tests {
         let r = restore(&format!("Die {} traf einen {} und eine andere {}.", placeholder(1), placeholder(2), placeholder(3)), &p);
         assert_eq!(r.text, "Die Eule traf einen Fuchs und eine andere Eule.");
         assert_eq!(r.applied, 3);
+    }
+
+    #[test]
+    fn the_signature_changes_with_the_matching_terms_and_only_with_those() {
+        let owl = entry("owl", "Eule");
+        let fox = entry("fox", "Fuchs");
+        let sig = |s: &str, e: &[&GlossaryEntry]| signature(s, e);
+        assert_eq!(sig("The cat sleeps.", &[&owl]), 0, "no term, no effect");
+        let a = sig("The owl sleeps.", &[&owl]);
+        assert_ne!(a, 0);
+        assert_eq!(a, sig("The owl sleeps.", &[&owl, &fox]), "an unrelated term does not change it");
+        assert_ne!(a, sig("The owl sleeps.", &[&entry("owl", "Kauz")]), "another target does");
+        assert_ne!(a, sig("The owl sleeps.", &[]), "removing the term does");
+        let mut cased = owl.clone();
+        cased.match_case = true;
+        assert_ne!(a, sig("The owl sleeps.", &[&cased]), "an option does");
+    }
+
+    #[test]
+    fn a_term_the_model_capitalized_is_written_as_in_the_glossary() {
+        let p = protect_with("I'm astonished and the owl too.", &[entry("astonished", "xsdcv"), entry("owl", "Eule")]);
+        assert_eq!(exact_terms("Ich bin Xsdcv und die eule auch.", &p), "Ich bin xsdcv und die Eule auch.");
+        assert_eq!(exact_terms("Nichts zu tun.", &p), "Nichts zu tun.");
+    }
+
+    #[test]
+    fn the_matched_source_text_is_kept_for_the_tooltip() {
+        let p = protect_with("An Owl and a fox.", &[entry("owl", "Eule"), entry("fox", "Fuchs")]);
+        assert_eq!(p.sources, vec!["Owl".to_string(), "fox".to_string()]);
     }
 
     #[test]

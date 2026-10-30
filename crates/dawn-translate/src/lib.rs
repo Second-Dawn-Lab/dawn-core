@@ -17,13 +17,13 @@ use std::{thread, time::Duration};
 
 use anyhow::{bail, Result};
 
-pub use alternatives::{clean_candidates, first_word_pieces, word_bounds, word_bounds_all, Alternative, Candidate};
-pub use glossary::{placeholder, protect, restore, Glossary, GlossaryEntry, Protected, Restored};
+pub use alternatives::{clean_candidates, dedupe_sentences, first_word_pieces, word_bounds, word_bounds_all, Alternative, Candidate};
+pub use glossary::{placeholder, protect, restore, signature as glossary_signature, Glossary, GlossaryEntry, Protected, Restored};
 pub use ct2::{default_threads, Ct2Engine, Ct2Options, Ct2Runner, StoreResolver};
 pub use detect::{detect_in_context, detect_language, is_short, Detection};
 pub use lang_token::{language_tokens, split_language_token, LangTokenizer};
 pub use split::{join_document, split_document, split_sentences};
-pub use router::{ModelSpec, Pass, Plan, Resolver, Router, Runner, Segment, TranslateError, TranslateOptions, Translation, Update};
+pub use router::{ModelSpec, Pass, Plan, Resolver, Router, Runner, Segment, TermHit, TranslateError, TranslateOptions, Translation, Update};
 
 /// A translation backend.
 pub trait TranslationEngine {

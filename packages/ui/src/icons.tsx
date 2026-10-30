@@ -92,6 +92,32 @@ const paths: Record<string, ReactNode> = {
     </>
   ),
   replace: <path d="M4 7h12M12 3l4 4-4 4M20 17H8M12 13l-4 4 4 4" />,
+  doc: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
+      <path d="M8 13h8M8 17h6" />
+    </>
+  ),
+  sheet: (
+    <>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 10h18M3 15h18M9 4v16M15 4v16" />
+    </>
+  ),
+  slides: (
+    <>
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M12 16v4M8 20h8M10 8.5v3l3-1.5z" />
+    </>
+  ),
+  pdf: (
+    <>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6" />
+      <path d="M8 17c1.5-1 2.5-3 3-6 .3 2 1.5 4 4 4.5-2 .2-4.500.7-7 1.500z" />
+    </>
+  ),
+  pencil: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5z" />,
+  plus: <path d="M12 5v14M5 12h14" />,
   scan: <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16" />,
 };
 

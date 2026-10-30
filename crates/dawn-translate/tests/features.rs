@@ -279,3 +279,40 @@ fn which_formatting_markers_survive() {
         println!("{name:<16} intact {balanced}/{total}   e.g. {sample:?}");
     }
 }
+
+/// Regression: "My Words" with `astonished -> xsdcv`; a sentence picked from the alternatives before the term was added
+/// must not hide the glossary, and a made-up word must come out as written.
+#[test]
+#[ignore = "needs the German pack"]
+fn a_glossary_term_wins_over_an_earlier_pick_and_a_made_up_word_survives() {
+    let e = engine();
+    e.set_glossary(Glossary::default());
+    let first = translate("I'm astonished.", "en", "de");
+    let seg = &first.segments[0];
+    let alts = e.alternatives("en", "de", &seg.input, &seg.target, dawn_translate::word_bounds_all(&seg.target)[2].0, "erstaunt", 10).unwrap();
+    let pick = alts.iter().find(|a| !a.current && a.word == "überrascht").expect("überrascht is offered");
+    e.pin("en", "de", &seg.source, &seg.input, &pick.text);
+    assert_eq!(translate("I'm astonished.", "en", "de").text, pick.text);
+
+    let mut g = Glossary::default();
+    g.entries = vec![entry("astonished", "xsdcv", "en", "de")];
+    e.set_glossary(g);
+    let out = translate("I'm astonished.", "en", "de");
+    println!("with the glossary: {:?} (hits {}, terms {:?})", out.text, out.glossary_hits, out.glossary_terms);
+    assert!(out.text.contains("xsdcv"), "{}", out.text);
+    assert_eq!(out.glossary_hits, 1);
+    assert!(!out.segments[0].pinned);
+    e.set_glossary(Glossary::default());
+}
+
+#[test]
+#[ignore = "needs the German pack"]
+fn sentence_alternatives_are_different_whole_sentences() {
+    let e = engine();
+    let out = translate("I'm astonished.", "en", "de");
+    let seg = &out.segments[0];
+    let alts = e.sentence_alternatives("en", "de", &seg.input, &seg.target, 3).unwrap();
+    println!("{:?} -> {alts:?}", seg.target);
+    assert!(!alts.is_empty() && alts.len() <= 3);
+    assert!(alts.iter().all(|a| a != &seg.target));
+}

@@ -13,7 +13,7 @@ use dawn_models::{Catalog, ModelStore};
 use ct2rs::{Config, TranslationOptions, Translator};
 use sentencepiece::SentencePieceProcessor;
 
-use crate::alternatives::{byte_offset_of_utf16, clean_candidates, first_word_pieces, prefix_piece_count, Alternative, Candidate};
+use crate::alternatives::{byte_offset_of_utf16, clean_candidates, dedupe_sentences, first_word_pieces, prefix_piece_count, Alternative, Candidate};
 use crate::lang_token::LangTokenizer;
 use crate::router::{ModelSpec, Resolver, Router, Runner, TranslateError, TranslateOptions, Translation, Update};
 use crate::TranslationEngine;
@@ -173,6 +173,28 @@ impl Ct2Runner {
 }
 
 impl Runner for Ct2Runner {
+    fn sentence_alternatives(&self, spec: &ModelSpec, source: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
+        let engine = |e: &dyn std::fmt::Display| TranslateError::Engine(e.to_string());
+        self.with_alt(spec, |m| {
+            let input = match &spec.prefix {
+                Some(token) => format!("{token} {source}"),
+                None => source.to_string(),
+            };
+            let source_tokens = ct2rs::Tokenizer::encode(&m.source, &input).map_err(|e| engine(&e))?;
+            // A wider beam than asked for: near duplicates are dropped afterwards.
+            let wanted = count + 4;
+            let options = TranslationOptions::<String, String> { beam_size: wanted, num_hypotheses: wanted, max_decoding_length: 512, ..Default::default() };
+            let results = m.translator.translate_batch(&[source_tokens], &options, None).map_err(|e| engine(&e))?;
+            let Some(result) = results.into_iter().next() else { return Ok(Vec::new()) };
+            let mut texts = Vec::new();
+            for hypothesis in &result.hypotheses {
+                let text = m.target.decode_pieces(hypothesis).map_err(|e| engine(&e))?;
+                texts.push(strip_language_tokens(&text));
+            }
+            Ok(dedupe_sentences(texts, current, count))
+        })
+    }
+
     fn alternatives(&self, spec: &ModelSpec, source: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         let engine = |e: &dyn std::fmt::Display| TranslateError::Engine(e.to_string());
         self.with_alt(spec, |m| {
@@ -324,6 +346,11 @@ impl Ct2Engine {
     /// Alternatives for the word that starts at UTF-16 offset `word_start` of `sentence`, the translation of `input` (see `Segment::input`).
     pub fn alternatives(&self, from: &str, to: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         self.router.alternatives(from, to, input, sentence, word_start, current_word, limit)
+    }
+
+    /// Up to `count` whole-sentence alternatives for the translation of `input`, different from `current`.
+    pub fn sentence_alternatives(&self, from: &str, to: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
+        self.router.sentence_alternatives(from, to, input, current, count)
     }
 
     /// Keep the user's pick for a sentence through later translations of the same source sentence.

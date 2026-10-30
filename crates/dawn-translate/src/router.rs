@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::alternatives::Alternative;
-use crate::glossary::{protect, restore, Glossary, Protected};
+use crate::glossary::{exact_terms, protect, restore, signature, Glossary, Protected};
 use crate::split::{join_document, split_document};
 
 /// An installed model ready to be loaded.
@@ -42,6 +42,11 @@ pub trait Runner: Send + Sync {
     /// app hides the feature.
     fn alternatives(&self, _model: &ModelSpec, _source: &str, _sentence: &str, _word_start: usize, _current_word: &str, _limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         Err(TranslateError::Engine("this engine cannot suggest alternatives".into()))
+    }
+
+    /// The n best whole translations of `source` (the best first), as the model ranks them.
+    fn sentence_alternatives(&self, _model: &ModelSpec, _source: &str, _current: &str, _count: usize) -> Result<Vec<String>, TranslateError> {
+        Err(TranslateError::Engine("this engine cannot suggest sentence alternatives".into()))
     }
 }
 
@@ -88,12 +93,26 @@ pub struct Translation {
     pub segments: Vec<Segment>,
     /// How many glossary terms were put into the text.
     pub glossary_hits: usize,
+    /// Where glossary terms stand in the text (for highlighting).
+    pub glossary_terms: Vec<TermHit>,
 }
 
 impl Translation {
     fn plain(text: &str, pivoted: bool) -> Self {
-        Self { text: text.to_string(), pivoted, segments: Vec::new(), glossary_hits: 0 }
+        Self { text: text.to_string(), pivoted, segments: Vec::new(), glossary_hits: 0, glossary_terms: Vec::new() }
     }
+}
+
+/// A glossary term in the translated text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TermHit {
+    /// Position of the term in [`Translation::text`], in UTF-16 units.
+    pub start: usize,
+    pub end: usize,
+    /// What the term replaced in the source sentence ("astonished").
+    pub source: String,
+    /// The term as inserted ("xsdcv").
+    pub target: String,
 }
 
 /// One translated sentence and where it sits in the final text.
@@ -217,7 +236,8 @@ impl SentenceCache {
 /// until the source sentence itself changes.
 #[derive(Default)]
 struct Pins {
-    map: HashMap<(String, String, String), (String, String)>,
+    /// (from, to, source sentence) -> (input of the last stage, translation, glossary signature of the sentence).
+    map: HashMap<(String, String, String), (String, String, u64)>,
     order: VecDeque<(String, String, String)>,
 }
 
@@ -252,9 +272,12 @@ impl<R: Resolver, N: Runner> Router<R, N> {
 
     /// Remember the user's pick for a sentence (see [`Pins`]).
     pub fn pin(&self, from: &str, to: &str, source: &str, input: &str, translation: &str) {
+        // The pick was made under the glossary as it is now; it is only valid while that stays true for this sentence.
+        let glossary = self.glossary.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let sig = signature(source, &glossary.for_pair(from, to));
         let key = (from.to_string(), to.to_string(), source.to_string());
         let mut pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
-        if pins.map.insert(key.clone(), (input.to_string(), translation.to_string())).is_none() {
+        if pins.map.insert(key.clone(), (input.to_string(), translation.to_string(), sig)).is_none() {
             pins.order.push_back(key);
         }
         while pins.order.len() > MAX_PINS {
@@ -264,9 +287,31 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
     }
 
-    fn pinned(&self, from: &str, to: &str, source: &str) -> Option<(String, String)> {
-        let pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
-        pins.map.get(&(from.to_string(), to.to_string(), source.to_string())).cloned()
+    /// The user's pick for a sentence, if it is still valid: when the glossary now treats the sentence
+    /// differently than when it was picked (a term added, edited, disabled or switched), the pick is dropped.
+    fn pinned(&self, from: &str, to: &str, source: &str, glossary_signature: u64) -> Option<(String, String)> {
+        let mut pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
+        let key = (from.to_string(), to.to_string(), source.to_string());
+        match pins.map.get(&key) {
+            Some((input, translation, sig)) if *sig == glossary_signature => Some((input.clone(), translation.clone())),
+            Some(_) => {
+                pins.map.remove(&key);
+                pins.order.retain(|k| k != &key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Up to `count` whole-sentence alternatives for the translation of `input`, different from `current`.
+    pub fn sentence_alternatives(&self, from: &str, to: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
+        let last_from = match self.plan(from, to)? {
+            Plan::Same => return Ok(Vec::new()),
+            Plan::Direct(_) => from.to_string(),
+            Plan::Pivot(..) => self.hub.clone(),
+        };
+        let model = self.resolver.resolve(&last_from, to).ok_or_else(|| TranslateError::ModelMissing(to.to_string()))?;
+        self.runner.sentence_alternatives(&model, input, current, count)
     }
 
     /// Alternatives for the word that follows `prefix` in the translation of `input`, where `input` is
@@ -359,7 +404,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
 
         // Sentences the user picked from the alternatives are not translated again.
         for i in 0..total {
-            if let Some((input, translation)) = self.pinned(from, to, &sources[i]) {
+            if let Some((input, translation)) = self.pinned(from, to, &sources[i], signature(&sources[i], &entries)) {
                 output[i] = Some(translation);
                 last_inputs[i] = input;
                 refined[i] = true;
@@ -427,7 +472,8 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         let segments = build_segments(&final_text, &sources, &last_inputs, &output, &pinned);
         // Counted once per sentence in the final pass; the draft pass would count them twice.
         let glossary_hits = (0..total).map(|i| restore_count(&protected[i], output[i].as_deref().unwrap_or(""))).sum();
-        Ok(Translation { text: final_text, pivoted, segments, glossary_hits })
+        let glossary_terms = term_hits(&segments, &protected, &output);
+        Ok(Translation { text: final_text, pivoted, segments, glossary_hits, glossary_terms })
     }
 
     /// The finished translation of one sentence at `beam`, if every stage is already cached, with
@@ -452,7 +498,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
             // The inline attempt decides: accepted, or the placeholder form is the answer.
             let (last_input, text) = self.peek(stages, &p.inline, beam)?;
             if p.all_terms_in(&text) {
-                return Some((last_input, text));
+                return Some((last_input, exact_terms(&text, p)));
             }
         }
         self.peek(stages, &p.text, beam).map(|(last_input, text)| (last_input, restore(&text, p).text))
@@ -471,7 +517,9 @@ impl<R: Resolver, N: Runner> Router<R, N> {
                 continue;
             }
             if inline_ok {
-                if !p.all_terms_in(&out[i].1) {
+                if p.all_terms_in(&out[i].1) {
+                    out[i].1 = exact_terms(&out[i].1, p);
+                } else {
                     retry.push(i);
                 }
             } else {
@@ -546,6 +594,31 @@ fn build_segments(text: &str, sources: &[String], inputs: &[String], outputs: &[
         cursor = end_byte;
     }
     segments
+}
+
+/// Where each glossary term stands in the final text: found in order inside its sentence's translation.
+/// Needs the segments (they give each sentence's position); a pinned sentence has none, it was chosen by hand.
+fn term_hits(segments: &[Segment], protected: &[Protected], outputs: &[Option<String>]) -> Vec<TermHit> {
+    let mut hits = Vec::new();
+    for (i, seg) in segments.iter().enumerate() {
+        if seg.pinned {
+            continue;
+        }
+        let (Some(p), Some(out)) = (protected.get(i), outputs.get(i).and_then(|o| o.as_deref())) else { continue };
+        let mut cursor = 0;
+        for (k, (_, target)) in p.terms.iter().enumerate() {
+            if target.is_empty() {
+                continue;
+            }
+            let Some(at) = out[cursor..].find(target.as_str()) else { continue };
+            let (from_byte, to_byte) = (cursor + at, cursor + at + target.len());
+            let before = out[..from_byte].encode_utf16().count();
+            let len = out[from_byte..to_byte].encode_utf16().count();
+            hits.push(TermHit { start: seg.start + before, end: seg.start + before + len, source: p.sources.get(k).cloned().unwrap_or_default(), target: target.clone() });
+            cursor = to_byte;
+        }
+    }
+    hits
 }
 
 /// Glossary terms of a sentence that are in its (restored) translation: restoring replaced each
@@ -811,5 +884,99 @@ mod tests {
         }
         assert_eq!(cache.get(&model, 2, "a"), None);
         assert_eq!(cache.get(&model, 2, "c").as_deref(), Some("C"));
+    }
+
+    // --- glossary and pinned choices ---------------------------------------------------------------------------
+
+    fn entry(source: &str, target: &str) -> crate::GlossaryEntry {
+        crate::GlossaryEntry { id: 1, from: "en".into(), to: "de".into(), source: source.into(), target: target.into(), match_case: false, whole_word: true, enabled: true }
+    }
+
+    fn glossary(entries: Vec<crate::GlossaryEntry>) -> Glossary {
+        Glossary { enabled: true, entries }
+    }
+
+    #[test]
+    fn a_pinned_choice_is_dropped_when_the_glossary_starts_to_treat_the_sentence_differently() {
+        let r = router(ALL);
+        let first = r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        let seg = &first.segments[0];
+        r.pin("en", "de", &seg.source, &seg.input, "Ich bin \u{fc}berrascht.");
+        assert_eq!(r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap().text, "Ich bin \u{fc}berrascht.", "the pick holds without a glossary");
+
+        // A term for a word in this sentence is added: the pick is no longer valid, the glossary decides.
+        r.set_glossary(glossary(vec![entry("astonished", "xsdcv")]));
+        let out = r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        assert!(out.text.contains("xsdcv"), "{}", out.text);
+        assert!(!out.segments[0].pinned);
+        assert_eq!(out.glossary_hits, 1);
+
+        // Picking again under the new glossary holds, until the term changes or is switched off.
+        r.pin("en", "de", "I'm astonished.", &out.segments[0].input, "Ich bin xsdcv hier.");
+        assert_eq!(r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap().text, "Ich bin xsdcv hier.");
+        r.set_glossary(glossary(vec![entry("astonished", "qwerty")]));
+        assert!(r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap().text.contains("qwerty"), "an edited term wins over the old pick");
+    }
+
+    #[test]
+    fn a_term_in_another_sentence_leaves_the_pick_alone_and_a_disabled_term_counts_as_a_change() {
+        let r = router(ALL);
+        let first = r.translate("Hello. I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        let seg = &first.segments[0];
+        r.pin("en", "de", &seg.source, &seg.input, "Hallo du.");
+        r.set_glossary(glossary(vec![entry("astonished", "xsdcv")]));
+        let out = r.translate("Hello. I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        assert!(out.segments[0].pinned && out.text.starts_with("Hallo du."), "{}", out.text);
+        assert!(out.text.contains("xsdcv"));
+
+        // A pinned sentence with a term, then the term is disabled: the sentence is translated again.
+        r.pin("en", "de", &out.segments[1].source, &out.segments[1].input, "Alt xsdcv.");
+        let mut off = entry("astonished", "xsdcv");
+        off.enabled = false;
+        r.set_glossary(glossary(vec![off]));
+        assert!(!r.translate("Hello. I'm astonished.", "en", "de", &no_cancel()).unwrap().text.contains("Alt xsdcv"));
+    }
+
+    /// Translates a made-up word away ("xsdcv" -> "foo") but copies the placeholder tokens through.
+    struct DropsMadeUpWords;
+    impl Runner for DropsMadeUpWords {
+        fn run(&self, _m: &ModelSpec, sentences: &[String], _b: usize) -> Result<Vec<String>, TranslateError> {
+            Ok(sentences.iter().map(|s| s.replace("xsdcv", "foo")).collect())
+        }
+    }
+
+    #[test]
+    fn a_made_up_target_survives_through_the_placeholder_when_the_model_changes_it() {
+        let r = Router::new(FakeResolver(ALL.iter().copied().collect()), DropsMadeUpWords, "en");
+        r.set_glossary(glossary(vec![entry("astonished", "xsdcv")]));
+        let out = r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        assert_eq!(out.text, "I'm xsdcv.", "the inline form lost the word, so the placeholder form put it in");
+        assert_eq!(out.glossary_hits, 1);
+        assert_eq!(out.glossary_terms.len(), 1);
+        assert_eq!((out.glossary_terms[0].source.as_str(), out.glossary_terms[0].target.as_str()), ("astonished", "xsdcv"));
+        assert_eq!(&out.text[out.glossary_terms[0].start..out.glossary_terms[0].end], "xsdcv");
+    }
+
+    #[test]
+    fn the_cache_does_not_serve_a_translation_made_under_another_glossary() {
+        let r = router(ALL);
+        let plain = r.translate("The owl sleeps.", "en", "de", &no_cancel()).unwrap().text;
+        r.set_glossary(glossary(vec![entry("owl", "Eule")]));
+        let with = r.translate("The owl sleeps.", "en", "de", &no_cancel()).unwrap().text;
+        assert_ne!(plain, with);
+        assert!(with.contains("Eule"));
+        r.set_glossary(Glossary::default());
+        assert_eq!(r.translate("The owl sleeps.", "en", "de", &no_cancel()).unwrap().text, plain, "switching it off brings the plain translation back");
+    }
+
+    #[test]
+    fn glossary_terms_are_located_in_the_final_text_across_sentences() {
+        let r = router(ALL);
+        r.set_glossary(glossary(vec![entry("owl", "Eule")]));
+        let out = r.translate("Hello there. The owl sleeps.", "en", "de", &no_cancel()).unwrap();
+        assert_eq!(out.glossary_terms.len(), 1);
+        let t = &out.glossary_terms[0];
+        assert_eq!(&out.text[t.start..t.end], "Eule");
+        assert_eq!(t.source, "owl");
     }
 }
