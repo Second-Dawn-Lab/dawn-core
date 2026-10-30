@@ -37,10 +37,10 @@ pub trait Runner: Send + Sync {
     /// Translate a batch of sentences with one model at the given beam size.
     fn run(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError>;
 
-    /// Up to `count` ways to continue the translation of `source` after `prefix` (the part of the
-    /// translation before the clicked word; empty for the first word). Engines that cannot do this
-    /// say so, and the app hides the feature.
-    fn alternatives(&self, _model: &ModelSpec, _source: &str, _prefix: &str, _count: usize) -> Result<Vec<Alternative>, TranslateError> {
+    /// Up to `limit` words for the position where the word at UTF-16 offset `word_start` of `sentence` (the
+    /// translation of `source`) stands, the current word first. Engines that cannot do this say so, and the
+    /// app hides the feature.
+    fn alternatives(&self, _model: &ModelSpec, _source: &str, _sentence: &str, _word_start: usize, _current_word: &str, _limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         Err(TranslateError::Engine("this engine cannot suggest alternatives".into()))
     }
 }
@@ -271,14 +271,14 @@ impl<R: Resolver, N: Runner> Router<R, N> {
 
     /// Alternatives for the word that follows `prefix` in the translation of `input`, where `input` is
     /// what the last model stage read (`Segment::input`).
-    pub fn alternatives(&self, from: &str, to: &str, input: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
+    pub fn alternatives(&self, from: &str, to: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         let last_from = match self.plan(from, to)? {
             Plan::Same => return Ok(Vec::new()),
             Plan::Direct(_) => from.to_string(),
             Plan::Pivot(..) => self.hub.clone(),
         };
         let model = self.resolver.resolve(&last_from, to).ok_or_else(|| TranslateError::ModelMissing(to.to_string()))?;
-        self.runner.alternatives(&model, input, prefix, count)
+        self.runner.alternatives(&model, input, sentence, word_start, current_word, limit)
     }
 
     pub fn runner(&self) -> &N {

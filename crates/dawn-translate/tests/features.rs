@@ -30,33 +30,79 @@ fn entry(source: &str, target: &str, from: &str, to: &str) -> GlossaryEntry {
     GlossaryEntry { id: 1, from: from.into(), to: to.into(), source: source.into(), target: target.into(), match_case: false, whole_word: true, enabled: true }
 }
 
+/// The byte-exact start of word number `n` (counted from 0) of `text`, as UTF-16 units.
+fn word_offset(text: &str, n: usize) -> (usize, String) {
+    let words = dawn_translate::word_bounds_all(text);
+    let (start, end) = words[n];
+    let units: Vec<u16> = text.encode_utf16().collect();
+    (start, String::from_utf16_lossy(&units[start..end]))
+}
+
+fn show(e: &Ct2Engine, source: &str, word: usize) -> Vec<dawn_translate::Alternative> {
+    let out = translate(source, "en", "de");
+    let seg = &out.segments[0];
+    let (start, current) = word_offset(&seg.target, word);
+    let started = Instant::now();
+    let alts = e.alternatives("en", "de", &seg.input, &seg.target, start, &current, 10).unwrap();
+    println!("\n{source:?} -> {:?}, word {word} ({current:?}): {} alternatives in {} ms", seg.target, alts.len(), started.elapsed().as_millis());
+    for a in &alts {
+        println!("   {}{:<14} {:>6.2}  {}", if a.current { "*" } else { " " }, a.word, a.score, a.preview);
+    }
+    alts
+}
+
 #[test]
 #[ignore = "needs the German pack"]
 fn alternatives_at_a_position_and_their_latency() {
     let e = engine();
-    let sentence = "The cat sleeps on the sofa because it is tired.";
-    let full = translate(sentence, "en", "de");
-    println!("translation: {:?}", full.text);
-    let seg = &full.segments[0];
-    assert_eq!(seg.target, full.text);
-
-    // The prefix is the translation up to the clicked word.
-    let words: Vec<&str> = seg.target.split(' ').collect();
-    for clicked in [0usize, 1, 3] {
-        let prefix = words[..clicked].join(" ");
-        let started = Instant::now();
-        let alts = e.alternatives("en", "de", &seg.input, &prefix, 5).unwrap();
-        println!("\nword {clicked} ({:?}), prefix {prefix:?}: {} alternatives in {} ms", words[clicked], alts.len(), started.elapsed().as_millis());
-        for a in &alts {
-            println!("  {:<14} -> {}", a.word, a.text);
-        }
-        assert!(!alts.is_empty());
-        assert!(alts.iter().all(|a| a.text.starts_with(&prefix)), "every alternative keeps the prefix");
-    }
-    // A second call is warm.
+    let alts = show(e, "The cat sleeps on the sofa because it is tired.", 1);
+    assert!(alts.first().is_some_and(|a| a.current && a.word == "Katze"));
+    // A warm call.
     let started = Instant::now();
-    e.alternatives("en", "de", &seg.input, "Die", 5).unwrap();
-    println!("\nwarm call: {} ms", started.elapsed().as_millis());
+    show(e, "The cat sleeps on the sofa because it is tired.", 0);
+    println!("warm call incl. translation: {} ms", started.elapsed().as_millis());
+}
+
+/// Regression: "I'm astonished" -> "Ich bin erstaunt." Clicking "erstaunt" must list whole words for that
+/// position, current word first, no fragments, no duplicates, no ungrammatical forced words ("ich", "mich").
+#[test]
+#[ignore = "needs the German pack"]
+fn regression_astonished() {
+    let e = engine();
+    let alts = show(e, "I'm astonished.", 2);
+    let words: Vec<&str> = alts.iter().map(|a| a.word.as_str()).collect();
+    assert_eq!(words[0], "erstaunt");
+    assert!(alts[0].current);
+    for junk in ["ich"] {
+        assert!(!words.contains(&junk), "{junk} is not an alternative here: {words:?}");
+    }
+    assert!(words.iter().any(|w| ["überrascht", "verblüfft"].contains(w)), "{words:?}");
+    assert!(alts.iter().all(|a| a.text.starts_with("Ich bin ")), "every alternative keeps the prefix");
+    assert!(alts.iter().all(|a| !a.word.is_empty() && !a.word.ends_with(['.', ',', '!', '?'])), "whole words without punctuation: {words:?}");
+    let mut keys: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), words.len(), "no duplicates: {words:?}");
+    assert!(alts.len() <= 10);
+}
+
+/// A word that the model writes as several pieces, and a word after punctuation.
+#[test]
+#[ignore = "needs the German pack"]
+fn regression_multi_piece_word_and_punctuation() {
+    let e = engine();
+    // "Unbelievably" is split into several SentencePiece pieces in German ("Unglaublicherweise").
+    let alts = show(e, "Unbelievably, the weather is nice today.", 0);
+    assert!(alts[0].current);
+    assert!(alts.iter().all(|a| !a.word.contains(' ')), "single words only");
+    // The word after a comma: the prefix must contain the comma.
+    let out = translate("Yes, the weather is nice today.", "en", "de");
+    let seg = &out.segments[0];
+    let (start, current) = word_offset(&seg.target, 1);
+    let alts = e.alternatives("en", "de", &seg.input, &seg.target, start, &current, 10).unwrap();
+    println!("\nafter the comma ({current:?}): {:?}", alts.iter().map(|a| a.word.as_str()).collect::<Vec<_>>());
+    let prefix = &seg.target[..seg.target.find(&current).unwrap()];
+    assert!(alts.iter().all(|a| a.text.starts_with(prefix.trim_end())), "prefix {prefix:?} kept: {alts:?}");
 }
 
 #[test]
@@ -66,7 +112,7 @@ fn a_picked_alternative_sticks_through_retranslation_until_the_source_changes() 
     let sentence = "The cat sleeps on the sofa.";
     let first = translate(sentence, "en", "de");
     let seg = &first.segments[0];
-    let alts = e.alternatives("en", "de", &seg.input, "", 5).unwrap();
+    let alts = e.alternatives("en", "de", &seg.input, &seg.target, 0, "Die", 10).unwrap();
     let pick = alts.iter().find(|a| a.text != seg.target).expect("a different alternative").clone();
     e.pin("en", "de", &seg.source, &seg.input, &pick.text);
 

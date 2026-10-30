@@ -125,7 +125,7 @@ pub(crate) fn load(path: &Path, kind: Kind) -> Result<Loaded, DocError> {
             skipped.push("table headers were kept as they are (Excel ties them to the table definition)".into());
         }
     }
-    let note_formulas = kind == Kind::Xlsx && parts.iter().any(|p| p.name.starts_with("xl/worksheets/") && (p.xml.contains("<f>") || p.xml.contains("<f ")));
+    let note_formulas = kind == Kind::Xlsx && parts.iter().any(|p| p.name.starts_with("xl/worksheets/") && p.scan.formulas);
     for (needle, what) in [
         ("word/charts/", "charts"),
         ("word/diagrams/", "SmartArt diagrams"),
@@ -155,21 +155,25 @@ fn natural_key(name: &str) -> (String, usize, String) {
     (stem, digits.parse().unwrap_or(0), name.to_string())
 }
 
+/// The column names of an Excel table definition, whatever prefix the file uses for the elements.
 fn table_column_names(xml: &str) -> Vec<String> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_str(xml);
     let mut names = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find("<tableColumn ") {
-        let tag_end = rest[start..].find('>').map_or(rest.len(), |i| start + i);
-        let tag = &rest[start..tag_end];
-        if let Some(at) = tag.find(" name=\"") {
-            let value = &tag[at + 7..];
-            if let Some(end) = value.find('"') {
-                if let Ok(text) = quick_xml::escape::unescape(&value[..end]) {
-                    names.push(text.into_owned());
+    while let Ok(event) = reader.read_event() {
+        match event {
+            Event::Eof => break,
+            Event::Start(e) | Event::Empty(e) if e.local_name().as_ref() == b"tableColumn" => {
+                for attribute in e.attributes().flatten() {
+                    if attribute.key.as_ref() == b"name" {
+                        if let Ok(value) = attribute.unescape_value() {
+                            names.push(value.into_owned());
+                        }
+                    }
                 }
             }
+            _ => {}
         }
-        rest = &rest[tag_end..];
     }
     names
 }
@@ -326,9 +330,9 @@ mod tests {
     fn a_pptx_translates_slides_and_notes_and_counts_slides() {
         let dir = temp_dir("pptx");
         let input = dir.join("deck.pptx");
-        let slide = |text: &str| format!(r#"<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp><p:graphicFrame><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>Cell text</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></p:graphicFrame></p:spTree></p:cSld></p:sld>"#);
+        let slide = |text: &str| format!(r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp><p:graphicFrame><a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>Cell text</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl></p:graphicFrame></p:spTree></p:cSld></p:sld>"#);
         let (s1, s2, s10) = (slide("First slide"), slide("Second slide"), slide("Tenth slide"));
-        let notes = br#"<p:notes xmlns:p="p" xmlns:a="a"><a:p><a:r><a:t>Speaker notes here</a:t></a:r></a:p></p:notes>"#;
+        let notes = br#"<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:p><a:r><a:t>Speaker notes here</a:t></a:r></a:p></p:notes>"#;
         make_zip(
             &input,
             &[
@@ -354,12 +358,12 @@ mod tests {
 
     fn xlsx(dir: &Path, with_table: bool) -> PathBuf {
         let path = dir.join(if with_table { "table.xlsx" } else { "sheet.xlsx" });
-        let shared = br#"<sst xmlns="x" count="4" uniqueCount="4"><si><t>Name</t></si><si><t>Total price</t></si><si><t>Paid</t></si><si><t>2024-05-01</t></si></sst>"#;
-        let sheet = br#"<worksheet xmlns="x"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><f>SUM(C2:C9)</f><v>42</v></c><c r="C2" t="inlineStr"><is><t>Inline text</t></is></c></row></sheetData></worksheet>"#;
-        let table = br#"<table xmlns="x" name="T1"><tableColumns count="1"><tableColumn id="1" name="Total price"/></tableColumns></table>"#;
+        let shared = br#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4"><si><t>Name</t></si><si><t>Total price</t></si><si><t>Paid</t></si><si><t>2024-05-01</t></si></sst>"#;
+        let sheet = br#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><f>SUM(C2:C9)</f><v>42</v></c><c r="C2" t="inlineStr"><is><t>Inline text</t></is></c></row></sheetData></worksheet>"#;
+        let table = br#"<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="T1"><tableColumns count="1"><tableColumn id="1" name="Total price"/></tableColumns></table>"#;
         let mut parts: Vec<(&str, &[u8])> = vec![
             ("[Content_Types].xml", CONTENT_TYPES),
-            ("xl/workbook.xml", b"<workbook xmlns=\"x\"><sheets><sheet name=\"Data\" sheetId=\"1\"/></sheets></workbook>"),
+            ("xl/workbook.xml", b"<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheets><sheet name=\"Data\" sheetId=\"1\"/></sheets></workbook>"),
             ("xl/sharedStrings.xml", shared),
             ("xl/worksheets/sheet1.xml", sheet),
         ];
@@ -430,7 +434,7 @@ mod tests {
             &path,
             &[
                 ("[Content_Types].xml", CONTENT_TYPES),
-                ("word/document.xml", br#"<w:document xmlns:w="w"><w:p><w:r><w:t>Fine text</w:t></w:r></w:p></w:document>"#),
+                ("word/document.xml", br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Fine text</w:t></w:r></w:p></w:document>"#),
                 ("word/header1.xml", b"<w:hdr><w:p><w:r><w:t>broken</w:p></w:hdr>"),
             ],
         );
@@ -444,5 +448,96 @@ mod tests {
     #[test]
     fn units_are_numbered_in_reading_order_across_numbered_slides() {
         assert!(natural_key("ppt/slides/slide2.xml") < natural_key("ppt/slides/slide10.xml"));
+    }
+
+    // --- namespace-prefixed files (what the .NET OpenXML SDK and ClosedXML write) ---------------------
+
+    const X_SHEET: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+    /// A workbook as ClosedXML writes it: every element prefixed `x:`, an empty shared string table, and text
+    /// cells stored as `t="str"` with a `<x:v>` value.
+    fn prefixed_xlsx(dir: &Path) -> PathBuf {
+        let path = dir.join("closedxml.xlsx");
+        let shared = format!(r#"<x:sst xmlns:x="{X_SHEET}" count="0" uniqueCount="0" />"#);
+        let sheet = format!(
+            r#"<x:worksheet xmlns:x="{X_SHEET}"><x:sheetData><x:row r="1"><x:c r="A1" t="str"><x:v>Customer name</x:v></x:c><x:c r="B1" t="str"><x:v>Amount due</x:v></x:c></x:row><x:row r="2"><x:c r="A2" t="str"><x:v>Hello world</x:v></x:c><x:c r="B2"><x:v>42</x:v></x:c><x:c r="C2" t="str"><x:f>CONCATENATE(A2," ",A1)</x:f><x:v>Hello world Customer name</x:v></x:c><x:c r="D2" t="str"><x:f t="shared" si="0"/><x:v>Computed text</x:v></x:c><x:c r="E2" t="str"><x:v>2024-05-01</x:v></x:c><x:c r="F2" t="inlineStr"><x:is><x:t>Inline words</x:t></x:is></x:c></x:row></x:sheetData></x:worksheet>"#
+        );
+        make_zip(&path, &[("[Content_Types].xml", CONTENT_TYPES), ("xl/workbook.xml", format!(r#"<x:workbook xmlns:x="{X_SHEET}"/>"#).as_bytes()), ("xl/sharedStrings.xml", shared.as_bytes()), ("xl/worksheets/sheet1.xml", sheet.as_bytes())]);
+        path
+    }
+
+    #[test]
+    fn a_prefixed_workbook_with_str_cells_and_an_empty_shared_string_table_is_translated() {
+        let dir = temp_dir("closedxml");
+        let input = prefixed_xlsx(&dir);
+        let output = dir.join("out.xlsx");
+        let report = translate_document(&input, &output, &mut Tag("de"), &mut |_| {}).unwrap();
+        assert!(report.units >= 4, "{report:?}");
+        let sheet = String::from_utf8(read_part(&output, "xl/worksheets/sheet1.xml")).unwrap();
+        assert!(sheet.contains("<x:v>[de]Customer name</x:v>"), "{sheet}");
+        assert!(sheet.contains("<x:v>[de]Amount due</x:v>") && sheet.contains("<x:v>[de]Hello world</x:v>"));
+        assert!(sheet.contains("<x:t>[de]Inline words</x:t>"), "inline strings still work");
+        // Formula results, numbers and dates stay as they were.
+        assert!(sheet.contains(r#"<x:f>CONCATENATE(A2," ",A1)</x:f><x:v>Hello world Customer name</x:v>"#), "{sheet}");
+        assert!(sheet.contains(r#"<x:f t="shared" si="0"/><x:v>Computed text</x:v>"#));
+        assert!(sheet.contains("<x:v>42</x:v>") && sheet.contains("<x:v>2024-05-01</x:v>"));
+        assert!(ooxml::is_well_formed(&sheet));
+        assert!(report.skipped.iter().any(|s| s.contains("formula")), "the formula note appears for a prefixed file too");
+        // Nothing else changed.
+        assert_eq!(read_part(&output, "xl/sharedStrings.xml"), read_part(&input, "xl/sharedStrings.xml"));
+        assert_eq!(read_part(&output, "xl/workbook.xml"), read_part(&input, "xl/workbook.xml"));
+    }
+
+    #[test]
+    fn str_cells_with_a_formula_are_left_alone_and_without_one_translated_in_a_default_namespace_file_too() {
+        let dir = temp_dir("strcells");
+        let path = dir.join("plain.xlsx");
+        let sheet = format!(r#"<worksheet xmlns="{X_SHEET}"><sheetData><row><c r="A1" t="str"><v>Plain text</v></c><c r="B1" t="str"><f>A1&amp;"!"</f><v>Plain text!</v></c><c r="C1" t="n"><v>7</v></c></row></sheetData></worksheet>"#);
+        make_zip(&path, &[("xl/workbook.xml", b"<workbook/>"), ("xl/worksheets/sheet1.xml", sheet.as_bytes())]);
+        let output = dir.join("out.xlsx");
+        translate_document(&path, &output, &mut Tag("de"), &mut |_| {}).unwrap();
+        let out = String::from_utf8(read_part(&output, "xl/worksheets/sheet1.xml")).unwrap();
+        assert!(out.contains("<v>[de]Plain text</v>"), "{out}");
+        assert!(out.contains(r#"<f>A1&amp;"!"</f><v>Plain text!</v>"#), "a formula result is not text to translate");
+        assert!(out.contains("<v>7</v>"));
+    }
+
+    #[test]
+    fn a_prefixed_docx_and_a_prefixed_pptx_are_translated() {
+        let dir = temp_dir("prefixed");
+        // Word with every element prefixed `x:`, and an element named `t` from another namespace that must be ignored.
+        let docx = dir.join("net.docx");
+        let document = r#"<x:document xmlns:x="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:o="urn:other"><x:body><x:p><x:r><x:t>Prefixed paragraph</x:t></x:r></x:p><x:p><x:r><x:t xml:space="preserve">Bold </x:t></x:r><x:r><x:rPr><x:b/></x:rPr><x:t>words</x:t></x:r></x:p><x:p><x:r><o:t>Not a Word text element</o:t></x:r></x:p></x:body></x:document>"#;
+        make_zip(&docx, &[("[Content_Types].xml", CONTENT_TYPES), ("word/document.xml", document.as_bytes())]);
+        let out = dir.join("net (DE).docx");
+        translate_document(&docx, &out, &mut Tag("de"), &mut |_| {}).unwrap();
+        let xml = String::from_utf8(read_part(&out, "word/document.xml")).unwrap();
+        assert!(xml.contains("<x:t>[de]Prefixed paragraph</x:t>"), "{xml}");
+        assert!(xml.contains("<o:t>Not a Word text element</o:t>"), "an element of another namespace is left alone");
+        assert!(xml.contains("<x:rPr><x:b/></x:rPr>"));
+
+        // PowerPoint with the DrawingML elements prefixed `d:` and the slide elements prefixed `p:`.
+        let pptx = dir.join("net.pptx");
+        let slide = r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><d:p><d:r><d:t>Prefixed slide title</d:t></d:r></d:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#;
+        make_zip(&pptx, &[("ppt/presentation.xml", b"<p:presentation xmlns:p=\"x\"/>"), ("ppt/slides/slide1.xml", slide.as_bytes())]);
+        let out = dir.join("net (DE).pptx");
+        translate_document(&pptx, &out, &mut Tag("de"), &mut |_| {}).unwrap();
+        assert!(String::from_utf8(read_part(&out, "ppt/slides/slide1.xml")).unwrap().contains("<d:t>[de]Prefixed slide title</d:t>"));
+    }
+
+    #[test]
+    fn iso_strict_namespaces_are_recognized_too() {
+        let dir = temp_dir("strict");
+        let docx = dir.join("strict.docx");
+        let document = r#"<w:document xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main"><w:body><w:p><w:r><w:t>Strict text</w:t></w:r></w:p></w:body></w:document>"#;
+        make_zip(&docx, &[("word/document.xml", document.as_bytes())]);
+        let out = dir.join("out.docx");
+        translate_document(&docx, &out, &mut Tag("de"), &mut |_| {}).unwrap();
+        assert!(String::from_utf8(read_part(&out, "word/document.xml")).unwrap().contains("[de]Strict text"));
+    }
+
+    #[test]
+    fn table_names_are_found_with_any_prefix() {
+        assert_eq!(table_column_names(r#"<x:table xmlns:x="u"><x:tableColumns><x:tableColumn id="1" name="Total &amp; tax"/><x:tableColumn id="2" name="Name"></x:tableColumn></x:tableColumns></x:table>"#), vec!["Total & tax", "Name"]);
     }
 }

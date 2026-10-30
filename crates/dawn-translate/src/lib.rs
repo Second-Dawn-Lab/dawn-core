@@ -17,7 +17,7 @@ use std::{thread, time::Duration};
 
 use anyhow::{bail, Result};
 
-pub use alternatives::{dedupe as dedupe_alternatives, first_word_pieces, word_bounds, Alternative};
+pub use alternatives::{clean_candidates, first_word_pieces, word_bounds, word_bounds_all, Alternative, Candidate};
 pub use glossary::{placeholder, protect, restore, Glossary, GlossaryEntry, Protected, Restored};
 pub use ct2::{default_threads, Ct2Engine, Ct2Options, Ct2Runner, StoreResolver};
 pub use detect::{detect_in_context, detect_language, is_short, Detection};

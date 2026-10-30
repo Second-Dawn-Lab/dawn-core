@@ -104,7 +104,7 @@ fn pptx_and_xlsx_translate_and_stay_valid() {
         &pptx,
         &[
             ("ppt/presentation.xml", "<p:presentation xmlns:p=\"p\"/>"),
-            ("ppt/slides/slide1.xml", "<p:sld xmlns:p=\"p\" xmlns:a=\"a\"><a:p><a:r><a:t>Welcome to our quarterly meeting</a:t></a:r></a:p><a:p><a:r><a:t>Sales grew by 12 percent</a:t></a:r></a:p></p:sld>"),
+            ("ppt/slides/slide1.xml", "<p:sld xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:p><a:r><a:t>Welcome to our quarterly meeting</a:t></a:r></a:p><a:p><a:r><a:t>Sales grew by 12 percent</a:t></a:r></a:p></p:sld>"),
         ],
     );
     let out = dir.join("deck (DE).pptx");
@@ -117,9 +117,9 @@ fn pptx_and_xlsx_translate_and_stay_valid() {
     make_zip(
         &xlsx,
         &[
-            ("xl/workbook.xml", "<workbook xmlns=\"x\"/>"),
-            ("xl/sharedStrings.xml", "<sst xmlns=\"x\"><si><t>Total amount</t></si><si><t>Customer name</t></si></sst>"),
-            ("xl/worksheets/sheet1.xml", "<worksheet xmlns=\"x\"><sheetData><row><c t=\"s\"><v>0</v></c><c><f>SUM(B2:B9)</f><v>10</v></c></row></sheetData></worksheet>"),
+            ("xl/workbook.xml", "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"),
+            ("xl/sharedStrings.xml", "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><si><t>Total amount</t></si><si><t>Customer name</t></si></sst>"),
+            ("xl/worksheets/sheet1.xml", "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row><c t=\"s\"><v>0</v></c><c><f>SUM(B2:B9)</f><v>10</v></c></row></sheetData></worksheet>"),
         ],
     );
     let out = dir.join("book (DE).xlsx");
@@ -128,4 +128,26 @@ fn pptx_and_xlsx_translate_and_stay_valid() {
     println!("{shared}");
     assert!(!shared.contains("Total amount"));
     assert!(part(&out, "xl/worksheets/sheet1.xml").contains("<f>SUM(B2:B9)</f><v>10</v>"));
+}
+
+/// A workbook written by ClosedXML / the .NET OpenXML SDK: every element prefixed `x:`, an empty shared
+/// string table, text cells as `t="str"` with a `<x:v>` value (the file that came back unchanged in v0.2.0).
+#[test]
+#[ignore = "needs the German pack"]
+fn a_closedxml_style_workbook_is_translated() {
+    let dir = temp("closedxml");
+    let ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    let shared = format!(r#"<x:sst xmlns:x="{ns}" count="0" uniqueCount="0" />"#);
+    let sheet = format!(
+        r#"<x:worksheet xmlns:x="{ns}"><x:sheetData><x:row r="1"><x:c r="A1" t="str"><x:v>Customer name</x:v></x:c><x:c r="B1" t="str"><x:v>Delivery date</x:v></x:c></x:row><x:row r="2"><x:c r="A2" t="str"><x:v>Please check the order before shipping.</x:v></x:c><x:c r="B2"><x:v>45000</x:v></x:c><x:c r="C2" t="str"><x:f>A2&amp;"!"</x:f><x:v>Please check the order before shipping.!</x:v></x:c></x:row></x:sheetData></x:worksheet>"#
+    );
+    let (input, output) = (dir.join("clxml.xlsx"), dir.join("clxml (DE).xlsx"));
+    make_zip(&input, &[("xl/workbook.xml", &format!(r#"<x:workbook xmlns:x="{ns}"/>"#)), ("xl/sharedStrings.xml", &shared), ("xl/worksheets/sheet1.xml", &sheet)]);
+    let report = translate_document(&input, &output, &mut engine(), &mut |_| {}).unwrap();
+    let out = part(&output, "xl/worksheets/sheet1.xml");
+    println!("{report:?}\n{out}");
+    assert!(!out.contains("Customer name") && !out.contains(">Delivery date<") && !out.contains("Please check the order before shipping.</x:v></x:c><x:c r=\"B2\""), "text cells are translated: {out}");
+    assert!(out.contains("<x:v>45000</x:v>"), "numbers stay");
+    assert!(out.contains(r#"<x:f>A2&amp;"!"</x:f><x:v>Please check the order before shipping.!</x:v>"#), "a formula result stays");
+    assert_ne!(std::fs::read(&input).unwrap(), std::fs::read(&output).unwrap(), "the file must not come back unchanged");
 }

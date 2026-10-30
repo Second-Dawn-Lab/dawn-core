@@ -18,6 +18,50 @@ tests plug in a fake. Everything runs locally; documents, glossary and history n
 Always skipped inside text: web and e-mail addresses (kept as written), numbers-only text, formulas, identifiers
 (`snake_case`, paths).
 
+## Namespaces and Excel text cells
+
+Elements are matched by **namespace URI and local name, never by prefix**: files written by the .NET OpenXML SDK or
+ClosedXML use `x:` (or `d:` for DrawingML), other writers `w:`, `a:` or none, and all are valid. The transitional
+(2006) and the ISO strict URIs are both recognized, and an element named `t` from another namespace (math, a custom
+part) is ignored. The tests have prefixed, default-namespace and strict fixtures for Word, PowerPoint and Excel.
+
+Excel stores text in three ways, and all three are handled: shared strings (`xl/sharedStrings.xml`), inline strings
+(`t="inlineStr"`) and **`t="str"` cells whose text is in `<v>`** (what ClosedXML writes, with an empty shared string
+table). A `t="str"` cell that has an `<f>` formula is a formula *result* and is left alone. Numbers and dates are
+not text. (In v0.2.0 only the first two were handled, so a workbook written the ClosedXML way came back unchanged.)
+
+## Several documents at once
+
+The Files tab takes any number of files of any mix of types (drop or "Choose files", "Add more documents" later). The
+list has one row per file with its detected language (changeable per file), status (waiting, translating with
+progress, done, error) and open / show in folder / remove. One target language and one glossary apply to all. Files
+run one after another in the background; "Cancel all" stops the running one (nothing is written for it) and clears the
+queue. The queue is a pure state machine (`batchQueue.ts`) with tests for the order, a failing file not stopping the
+rest, cancelling and removing. Each finished file adds one History entry.
+
+## Keep as PDF: evaluation (not built)
+
+The question to answer is whether a *translated PDF with the original layout* can reach acceptable quality now.
+Findings, with the permissively licensed options:
+
+| | PDFium (`pdfium-render`, MIT or Apache-2.0; PDFium BSD-3/Apache-2.0) | Content streams with `lopdf` (MIT) |
+|---|---|---|
+| Size | `pdfium.dll` for Windows x64 is about 11 MB installed (3.9 MB download); the crate adds little | no engine; fonts only |
+| What it can do | read text objects with boxes, remove them, add text objects with an embedded TrueType font | edit `Tj`/`TJ` operators |
+| Problem 1: fonts | text in a PDF uses subset fonts with custom encodings; the original glyphs cannot be reused for new text, so every replaced word needs a font that covers the target script, embedded in the file. Latin and Cyrillic need one font (about 0.5 MB), Arabic/Urdu, Devanagari and CJK each their own (CJK 8 to 16 MB) | the same, and the font objects must be written by hand |
+| Problem 2: shaping | neither PDFium nor `lopdf` shapes text: Arabic and Urdu letters must be joined and reordered, Devanagari needs conjuncts. That needs a shaping library (`rustybuzz`, MIT) and drawing positioned glyphs, not strings | the same |
+| Problem 3: layout | a "text block" does not exist in a PDF. Lines, columns and table cells are loose text runs; grouping them into paragraphs, translating a paragraph, and refitting it into the original box (shrinking the font) needs a layout analysis. Multi-column pages, tables, text on paths, rotated text and headers that overlap images break it | the same |
+| Problem 4: right to left | the box must be mirrored and the text aligned right | the same |
+
+My estimate: Latin and Cyrillic targets for single-column text PDFs could be made to look acceptable with PDFium and
+about one font, but Arabic/Urdu, Devanagari and CJK need a shaping and glyph-drawing step on top, and the
+layout analysis is the largest part for every language. That is a separate piece of work (weeks, not part of
+a patch release), and a result that is wrong on many real PDFs would be worse than the clear Word conversion. So
+"Keep as PDF" is **not built**: the choice setting and its rules exist (`pdfChoice.ts`, `pdfOutput` and `pdfAsk`),
+and today every PDF is converted to a Word document without asking. If you want it, the recommended route is PDFium
+as a downloadable pack (like OCR packs would be) plus one Latin/Cyrillic font, for single-column text PDFs only, with a
+clear "layout may differ" note, and the other scripts to follow with shaping.
+
 ## Inline formatting
 
 A paragraph is a row of runs (`This is a ` plain, `very important` bold, ` sentence.`). Translating run by run would cut

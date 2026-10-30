@@ -4,6 +4,11 @@ A glossary is a list of terms with the way they must be translated: `owl -> Eule
 `Kernel -> Kernel` to keep a name. It is applied to every translation by `dawn-translate` (`glossary.rs` and the
 router), so text, the quick popup, captures and documents all use it.
 
+Glossaries are **named lists** ("My business glossary", "Medical terms"); each has its own entries, and one can be
+switched on at a time (or none). The Text tab, the Files tab and the quick popup share the choice (the setting
+`glossaryActive`), so the popup uses the last one picked. A glossary file from before named lists is migrated into one list
+called "My glossary", and stays switched on if the old global switch was on.
+
 Entries belong to one language pair (`from`, `to`) and have three options: *match case*, *whole word* (default on)
 and *enabled*. The whole glossary has a global switch. The app stores it as JSON; CSV import and export use the
 columns `source,target,from,to,match_case,whole_word,enabled` (comma or, for Excel in many locales, semicolon

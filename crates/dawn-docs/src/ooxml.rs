@@ -22,13 +22,19 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::{NsReader, Reader};
 
 use crate::protect;
 
-/// The element names (without prefix) that give the text structure of one kind of part.
+/// The elements that give the text structure of one kind of part.
+///
+/// Elements are matched by namespace URI and local name, never by prefix: files written by the .NET
+/// OpenXML SDK or ClosedXML use `x:`, other writers `w:`, `a:` or no prefix at all, and all of them are valid.
 #[derive(Debug)]
 pub struct Dialect {
+    /// The namespace URIs of the markup language (the 2006 transitional one and the ISO strict one).
+    pub namespaces: &'static [&'static str],
     /// A paragraph-like container: `p`, or `si` / `is` / `text` in Excel.
     pub para: &'static [&'static str],
     pub run: &'static [&'static str],
@@ -39,11 +45,18 @@ pub struct Dialect {
     pub breaks: &'static [&'static str],
     /// Property elements that hide a run.
     pub hidden: &'static [&'static str],
-    /// Text below these elements is not content (math, phonetic guides).
+    /// Text below these elements (any namespace) is not content (math, phonetic guides).
     pub skip_inside: &'static [&'static str],
+    /// Worksheets: a cell of type `str` without a formula holds its text in `<v>`.
+    pub str_cells: bool,
 }
 
+pub const NS_WORD: &[&str] = &["http://schemas.openxmlformats.org/wordprocessingml/2006/main", "http://purl.oclc.org/ooxml/wordprocessingml/main"];
+pub const NS_DRAWING: &[&str] = &["http://schemas.openxmlformats.org/drawingml/2006/main", "http://purl.oclc.org/ooxml/drawingml/main"];
+pub const NS_SHEET: &[&str] = &["http://schemas.openxmlformats.org/spreadsheetml/2006/main", "http://purl.oclc.org/ooxml/spreadsheetml/main"];
+
 pub const WORD: Dialect = Dialect {
+    namespaces: NS_WORD,
     para: &["p"],
     run: &["r"],
     text: &["t"],
@@ -51,10 +64,12 @@ pub const WORD: Dialect = Dialect {
     breaks: &["tab", "br", "cr", "drawing", "pict", "AlternateContent", "object", "sym", "ptab"],
     hidden: &["vanish"],
     skip_inside: &["oMath", "oMathPara", "instrText"],
+    str_cells: false,
 };
 
 /// PowerPoint, and the DrawingML text boxes that Word and Excel embed.
 pub const DRAWING: Dialect = Dialect {
+    namespaces: NS_DRAWING,
     para: &["p"],
     run: &["r"],
     text: &["t"],
@@ -62,9 +77,12 @@ pub const DRAWING: Dialect = Dialect {
     breaks: &["br", "fld"],
     hidden: &[],
     skip_inside: &[],
+    str_cells: false,
 };
 
+/// Shared strings, inline strings, comments and `str` cells of Excel.
 pub const EXCEL_STRINGS: Dialect = Dialect {
+    namespaces: NS_SHEET,
     para: &["si", "is", "text"],
     run: &["r"],
     text: &["t"],
@@ -72,6 +90,7 @@ pub const EXCEL_STRINGS: Dialect = Dialect {
     breaks: &[],
     hidden: &[],
     skip_inside: &["rPh", "phoneticPr"],
+    str_cells: true,
 };
 
 #[derive(Debug, Clone)]
@@ -95,6 +114,8 @@ pub struct Segment {
 
 #[derive(Debug, Default)]
 pub struct Scan {
+    /// The part has formulas (worksheets): their text compared with fixed text may need adjusting.
+    pub formulas: bool,
     pub nodes: Vec<TextNode>,
     pub segments: Vec<Segment>,
     /// Run formatting by index; 0 is "no properties".
@@ -108,7 +129,8 @@ fn local(name: &[u8]) -> &[u8] {
     }
 }
 
-fn is_one_of(name: &[u8], list: &[&str]) -> bool {
+/// The local name is in `list`, whatever the namespace.
+fn local_in(name: &[u8], list: &[&str]) -> bool {
     let l = local(name);
     list.iter().any(|n| n.as_bytes() == l)
 }
@@ -117,20 +139,30 @@ fn has_preserve(e: &BytesStart) -> bool {
     e.attributes().flatten().any(|a| a.key.as_ref() == b"xml:space" && a.value.as_ref() == b"preserve")
 }
 
+fn attribute_is(e: &BytesStart, key: &[u8], value: &[u8]) -> bool {
+    e.attributes().flatten().any(|a| local(a.key.as_ref()) == key && a.value.as_ref() == value)
+}
+
 struct RunState {
     key: usize,
     hidden: bool,
 }
 
+/// A worksheet cell of type `str`: its `<v>` is text unless the cell has a formula (then it is a result).
+struct StrCell {
+    formula: bool,
+}
+
 /// Find the text of one part.
 pub fn scan(xml: &str, d: &Dialect) -> Result<Scan, String> {
-    let mut reader = Reader::from_str(xml);
+    let mut reader = NsReader::from_str(xml);
     let mut out = Scan { keys: vec![String::new()], ..Default::default() };
     let mut paras: Vec<Vec<usize>> = Vec::new();
     let mut run: Option<RunState> = None;
     let mut props_start: Option<usize> = None;
     let mut in_text: Option<(Range<usize>, bool)> = None;
     let mut skip_depth = 0usize;
+    let mut cell: Option<StrCell> = None;
 
     fn close(paras: &mut [Vec<usize>], segments: &mut Vec<Segment>) {
         if let Some(top) = paras.last_mut() {
@@ -142,47 +174,70 @@ pub fn scan(xml: &str, d: &Dialect) -> Result<Scan, String> {
 
     loop {
         let before = reader.buffer_position() as usize;
-        let event = reader.read_event().map_err(|e| format!("XML error at byte {before}: {e}"))?;
+        let (resolved, event) = reader.read_resolved_event().map_err(|e| format!("XML error at byte {before}: {e}"))?;
+        // Is the element in this markup language's namespace?
+        let in_ns = matches!(&resolved, ResolveResult::Bound(Namespace(ns)) if d.namespaces.iter().any(|n| n.as_bytes() == *ns));
         let after = reader.buffer_position() as usize;
         match event {
             Event::Eof => break,
             Event::Start(e) => {
                 let name = e.name();
                 let name = name.as_ref();
-                if is_one_of(name, d.skip_inside) {
+                let is = |list: &[&str]| in_ns && local_in(name, list);
+                if local_in(name, d.skip_inside) {
                     skip_depth += 1;
                 }
-                if is_one_of(name, d.para) {
+                if is(d.para) {
                     paras.push(Vec::new());
-                } else if is_one_of(name, d.run) {
+                } else if d.str_cells && is(&["c"]) {
+                    if attribute_is(&e, b"t", b"str") {
+                        cell = Some(StrCell { formula: false });
+                        paras.push(Vec::new());
+                    }
+                } else if d.str_cells && is(&["f"]) {
+                    out.formulas = true;
+                    if let Some(c) = cell.as_mut() {
+                        c.formula = true;
+                    }
+                } else if d.str_cells && is(&["v"]) && cell.as_ref().is_some_and(|c| !c.formula) {
+                    // xml:space is not allowed on <v>, so the node counts as already preserving.
+                    in_text = Some((before..after, true));
+                } else if is(d.run) {
                     run = Some(RunState { key: 0, hidden: false });
-                } else if is_one_of(name, d.props) && run.is_some() {
+                } else if is(d.props) && run.is_some() {
                     props_start = Some(before);
-                } else if is_one_of(name, d.hidden) && props_start.is_some() {
+                } else if is(d.hidden) && props_start.is_some() {
                     if let Some(r) = run.as_mut() {
                         r.hidden = true;
                     }
-                } else if is_one_of(name, d.text) && !paras.is_empty() {
+                } else if is(d.text) && !paras.is_empty() {
                     in_text = Some((before..after, has_preserve(&e)));
-                } else if is_one_of(name, d.breaks) {
+                } else if is(d.breaks) {
                     close(&mut paras, &mut out.segments);
                 }
             }
             Event::Empty(e) => {
                 let name = e.name();
                 let name = name.as_ref();
-                if is_one_of(name, d.hidden) && props_start.is_some() {
+                let is = |list: &[&str]| in_ns && local_in(name, list);
+                if d.str_cells && is(&["f"]) {
+                    out.formulas = true;
+                    if let Some(c) = cell.as_mut() {
+                        c.formula = true;
+                    }
+                } else if is(d.hidden) && props_start.is_some() {
                     if let Some(r) = run.as_mut() {
                         r.hidden = true;
                     }
-                } else if is_one_of(name, d.breaks) {
+                } else if is(d.breaks) {
                     close(&mut paras, &mut out.segments);
                 }
             }
             Event::End(e) => {
                 let name = e.name();
                 let name = name.as_ref();
-                if is_one_of(name, d.text) {
+                let is = |list: &[&str]| in_ns && local_in(name, list);
+                if is(d.text) || (d.str_cells && is(&["v"])) {
                     if let Some((tag, preserve)) = in_text.take() {
                         let content = tag.end..before;
                         let raw = &xml[content.clone()];
@@ -196,7 +251,7 @@ pub fn scan(xml: &str, d: &Dialect) -> Result<Scan, String> {
                             close(&mut paras, &mut out.segments);
                         }
                     }
-                } else if is_one_of(name, d.props) {
+                } else if is(d.props) {
                     if let (Some(start), Some(r)) = (props_start.take(), run.as_mut()) {
                         let key = &xml[start..after];
                         r.key = match out.keys.iter().position(|k| k == key) {
@@ -207,13 +262,18 @@ pub fn scan(xml: &str, d: &Dialect) -> Result<Scan, String> {
                             }
                         };
                     }
-                } else if is_one_of(name, d.run) {
+                } else if is(d.run) {
                     run = None;
-                } else if is_one_of(name, d.para) {
+                } else if d.str_cells && is(&["c"]) {
+                    if cell.take().is_some() {
+                        close(&mut paras, &mut out.segments);
+                        paras.pop();
+                    }
+                } else if is(d.para) {
                     close(&mut paras, &mut out.segments);
                     paras.pop();
                 }
-                if is_one_of(name, d.skip_inside) {
+                if local_in(name, d.skip_inside) {
                     skip_depth = skip_depth.saturating_sub(1);
                 }
             }
@@ -577,7 +637,7 @@ mod tests {
 
     #[test]
     fn addresses_survive_the_round_trip() {
-        let xml = r#"<w:document xmlns:w="x"><w:p><w:r><w:t>Visit https://example.org/a now.</w:t></w:r></w:p></w:document>"#;
+        let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Visit https://example.org/a now.</w:t></w:r></w:p></w:document>"#;
         let scan = scan(xml, &WORD).unwrap();
         let units = plan(&scan);
         assert_eq!(units[0].text, "Visit Uq1x now.");
@@ -587,7 +647,7 @@ mod tests {
 
     #[test]
     fn excel_shared_strings_rich_text_and_phonetics() {
-        let xml = r#"<sst xmlns="x"><si><t>Total</t></si><si><r><rPr><b/></rPr><t>Net</t></r><r><t xml:space="preserve"> price</t></r></si><si><t>Hello</t><rPh sb="0" eb="1"><t>ハロー</t></rPh></si></sst>"#;
+        let xml = r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>Total</t></si><si><r><rPr><b/></rPr><t>Net</t></r><r><t xml:space="preserve"> price</t></r></si><si><t>Hello</t><rPh sb="0" eb="1"><t>ハロー</t></rPh></si></sst>"#;
         let scan = scan(xml, &EXCEL_STRINGS).unwrap();
         assert_eq!(texts(&scan), vec!["Total", "Net price", "Hello"]);
     }

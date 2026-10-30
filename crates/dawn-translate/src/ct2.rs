@@ -13,7 +13,7 @@ use dawn_models::{Catalog, ModelStore};
 use ct2rs::{Config, TranslationOptions, Translator};
 use sentencepiece::SentencePieceProcessor;
 
-use crate::alternatives::{dedupe, first_word_pieces, Alternative};
+use crate::alternatives::{byte_offset_of_utf16, clean_candidates, first_word_pieces, prefix_piece_count, Alternative, Candidate};
 use crate::lang_token::LangTokenizer;
 use crate::router::{ModelSpec, Resolver, Router, Runner, TranslateError, TranslateOptions, Translation, Update};
 use crate::TranslationEngine;
@@ -173,7 +173,7 @@ impl Ct2Runner {
 }
 
 impl Runner for Ct2Runner {
-    fn alternatives(&self, spec: &ModelSpec, source: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
+    fn alternatives(&self, spec: &ModelSpec, source: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         let engine = |e: &dyn std::fmt::Display| TranslateError::Engine(e.to_string());
         self.with_alt(spec, |m| {
             let input = match &spec.prefix {
@@ -181,20 +181,24 @@ impl Runner for Ct2Runner {
                 None => source.to_string(),
             };
             let source_tokens = ct2rs::Tokenizer::encode(&m.source, &input).map_err(|e| engine(&e))?;
-            let prefix = prefix.trim_end();
-            let prefix_tokens: Vec<String> = if prefix.is_empty() {
-                Vec::new()
-            } else {
-                m.target.encode(prefix).map_err(|e| engine(&e))?.into_iter().map(|p| p.piece).collect()
-            };
-            // Ask for a few more than needed: duplicates (same word, different case) are dropped.
-            let wanted = (count + 2).max(4);
+            // The prefix is exactly the pieces that come before the clicked word: the whole sentence is encoded
+            // once and cut where the word starts (SentencePiece reports where each piece sits), so words split
+            // into several pieces, punctuation and apostrophes cannot shift the position.
+            let encoded = m.target.encode(sentence).map_err(|e| engine(&e))?;
+            let spans: Vec<(usize, usize)> = encoded.iter().map(|p| (p.span.0 as usize, p.span.1 as usize)).collect();
+            let keep = prefix_piece_count(&spans, byte_offset_of_utf16(sentence, word_start));
+            let prefix_tokens: Vec<String> = encoded[..keep].iter().map(|p| p.piece.clone()).collect();
+            let current_rest: Vec<String> = encoded[keep..].iter().map(|p| p.piece.clone()).collect();
+            let current_continuation = m.target.decode_pieces(&current_rest).map_err(|e| engine(&e))?;
+
+            // Ask for more than are shown: duplicates, fragments and poor sentences are dropped afterwards.
+            let wanted = limit + 6;
             let options = TranslationOptions::<String, String> {
                 beam_size: wanted,
                 num_hypotheses: wanted,
                 return_alternatives: true,
-                // Words the model gives almost no chance are noise, not alternatives.
-                min_alternative_expansion_prob: 0.003,
+                return_scores: true,
+                min_alternative_expansion_prob: 0.005,
                 max_decoding_length: 512,
                 ..Default::default()
             };
@@ -203,17 +207,24 @@ impl Runner for Ct2Runner {
                 .translate_batch_with_target_prefix(&[source_tokens], &[prefix_tokens.clone()], &options, None)
                 .map_err(|e| engine(&e))?;
             let Some(result) = results.into_iter().next() else { return Ok(Vec::new()) };
-            let mut found = Vec::new();
-            for hypothesis in result.hypotheses {
+            let mut candidates = Vec::new();
+            for (i, hypothesis) in result.hypotheses.iter().enumerate() {
                 let rest = hypothesis.get(prefix_tokens.len()..).unwrap_or(&[]);
                 if rest.is_empty() {
                     continue;
                 }
                 let word = m.target.decode_pieces(first_word_pieces(rest)).map_err(|e| engine(&e))?;
-                let text = m.target.decode_pieces(&hypothesis).map_err(|e| engine(&e))?;
-                found.push(Alternative { word: strip_language_tokens(&word), text: strip_language_tokens(&text) });
+                let continuation = m.target.decode_pieces(rest).map_err(|e| engine(&e))?;
+                let text = m.target.decode_pieces(hypothesis).map_err(|e| engine(&e))?;
+                candidates.push(Candidate {
+                    pieces: rest.to_vec(),
+                    word: strip_language_tokens(&word),
+                    continuation: strip_language_tokens(&continuation),
+                    text: strip_language_tokens(&text),
+                    score: result.scores.get(i).copied().unwrap_or(0.0),
+                });
             }
-            Ok(dedupe(found, "", count + 1))
+            Ok(clean_candidates(candidates, current_word, sentence, &current_continuation, &sentence[..byte_offset_of_utf16(sentence, word_start)], limit))
         })
     }
 
@@ -310,9 +321,9 @@ impl Ct2Engine {
         self.router.translate_streaming(text, from, to, cancel, options, on_update)
     }
 
-    /// Alternatives for the word after `prefix` in the translation of `input` (see `Segment::input`).
-    pub fn alternatives(&self, from: &str, to: &str, input: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
-        self.router.alternatives(from, to, input, prefix, count)
+    /// Alternatives for the word that starts at UTF-16 offset `word_start` of `sentence`, the translation of `input` (see `Segment::input`).
+    pub fn alternatives(&self, from: &str, to: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
+        self.router.alternatives(from, to, input, sentence, word_start, current_word, limit)
     }
 
     /// Keep the user's pick for a sentence through later translations of the same source sentence.
