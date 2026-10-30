@@ -26,7 +26,7 @@ Apps (Tauri 2 + React + TypeScript + Vite) live in their own repositories. Apps 
 | Crate | Role |
 |---|---|
 | `dawn-core` | Paths (`%AppData%/SecondDawn`), atomic JSON read/write |
-| `dawn-models` | Language catalog, resumable downloads, checksum verification, the shared model store. **The only code allowed to use the network** |
+| `dawn-models` | Language catalog, resumable downloads, checksum verification, the shared model store. **The only shared code allowed to use the network** (pack downloads). The one other network use is an app's own update check, e.g. Owl-L asking `latest.json` on its GitHub release at most once a day |
 | `dawn-translate` | `TranslationEngine` trait; `Ct2Engine` (CTranslate2 via `ct2rs`, oneDNN backend), the hub-and-pivot router with streaming batches and a per-sentence cache, language-aware sentence splitting, language detection (`whatlang`), plus a `StubEngine` for tests |
 | `dawn-ocr` | OCR engines behind one trait (Windows OCR first) |
 | `dawn-capture` | Screen capture and area-selection coordinate mapping |

@@ -16,8 +16,20 @@ pub fn data_dir() -> PathBuf {
 }
 
 /// The shared model store used by every app.
+///
+/// Development builds only: the environment variable `DAWN_MODELS_DIR` points the store at another
+/// folder (for example an empty temporary one, to test pack downloads without touching the installed
+/// packs). Release builds ignore it.
 pub fn models_dir() -> PathBuf {
-    data_dir().join("models")
+    let override_dir = if cfg!(debug_assertions) { env::var_os("DAWN_MODELS_DIR") } else { None };
+    models_dir_with(override_dir)
+}
+
+fn models_dir_with(override_dir: Option<std::ffi::OsString>) -> PathBuf {
+    match override_dir.filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => data_dir().join("models"),
+    }
 }
 
 /// Per-app data folder, e.g. `%AppData%/SecondDawn/owll`.
@@ -44,3 +56,15 @@ pub fn write_json<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
 }
 
 // TODO: logging setup shared by all apps.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_models_dir_override_replaces_the_shared_store() {
+        assert_eq!(models_dir_with(Some("D:/tmp/packs".into())), PathBuf::from("D:/tmp/packs"));
+        assert_eq!(models_dir_with(Some("".into())), data_dir().join("models"), "an empty value is ignored");
+        assert_eq!(models_dir_with(None), data_dir().join("models"));
+    }
+}

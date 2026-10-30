@@ -1,6 +1,7 @@
 //! Resumable downloads over `https://` (and `file://`, for local testing).
 //!
-//! This module is the only place in Second Dawn that opens network connections.
+//! This module is the only shared code in Second Dawn that opens network connections (an app's own
+//! update check is the one other use, see the app's docs).
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};

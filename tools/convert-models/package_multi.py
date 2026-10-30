@@ -76,7 +76,7 @@ def main() -> int:
         "id": args.id,
         "sources": args.sources,
         "targets": args.targets,
-        "url": archive.resolve().as_uri(),
+        "urls": [archive.resolve().as_uri()],
         "sizeBytes": archive.stat().st_size,
         "sha256": sha256_file(archive),
         "license": args.license,

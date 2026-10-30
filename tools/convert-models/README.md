@@ -25,7 +25,8 @@ py -3.12 -m venv .venv
 ```
 
 - Output goes to `out/` (git-ignored): the zips, `catalog.entries.<languages>.json` for pasting, and a Hugging Face download cache in `out/_hf/`.
-- `url` fields are `file://` urls to the zips in `out/`, so you can test the whole download flow locally. The urls in `models/catalog.json` are placeholders (`file:///path/to/dawn-core/...`): point them at your own `out/` folder or replace them with hosted urls when publishing.
+- The converter writes `urls` as a `file://` url to the zip in `out/`, so you can test the whole download flow locally. Before publishing, upload the zips (see "Hosting the packs" in [docs/models.md](../../docs/models.md)) and replace the urls with the commit-pinned Hugging Face urls.
+- `make_model_card.py` writes the model card (`out/README.md`) for the Hugging Face repo from `models/catalog.json`.
 - A direction that does not exist on Hugging Face is reported and the language is skipped. Nothing is substituted.
 - Multi-target models (such as `en->zh`) need a language token; the script records it as `prefix` if the model's vocabulary contains one of its preferred tokens, and warns otherwise.
 - Existing zips are reused; delete one to convert it again.

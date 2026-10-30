@@ -146,13 +146,71 @@ fn from_common_words(text: &str, allowed: &[String]) -> Option<String> {
     }
 }
 
+/// Text as the detector should see it. OCR output is full of symbols, bullets, stray bars and digits
+/// that carry no language but disturb the letter statistics, so everything that is not a letter,
+/// an apostrophe or a hyphen becomes a space, and runs of whitespace (line breaks too) collapse.
+fn clean_for_detection(text: &str) -> String {
+    let spaced: String = text.chars().map(|c| if c.is_alphabetic() || matches!(c, '\'' | '\u{2019}' | '-') { c } else { ' ' }).collect();
+    spaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Frequent function words that belong (almost) only to one language. The statistical detector
+/// mistakes plain English such as "Free software under the MIT license." for German, but any text
+/// with "the" and "under" is English. Words that exist in several languages are left out.
+const STOP_WORDS: &[(&str, &[&str])] = &[
+    ("en", &["the", "and", "of", "to", "is", "are", "you", "your", "this", "that", "with", "for", "under", "what", "how", "from", "have", "not", "can", "will", "never", "was", "were", "our"]),
+    ("de", &["der", "die", "das", "und", "ist", "nicht", "ein", "eine", "ich", "wir", "mit", "für", "auf", "zu", "den", "dem", "sie", "auch", "nur", "wie"]),
+    ("fr", &["le", "la", "les", "des", "est", "une", "pas", "pour", "vous", "nous", "dans", "avec", "sur", "je", "mais"]),
+    ("es", &["el", "los", "las", "una", "es", "por", "para", "con", "del", "está", "pero", "como", "yo"]),
+    ("it", &["il", "che", "non", "per", "sono", "della", "gli", "questo", "ma", "anche"]),
+    ("pt", &["os", "uma", "não", "você", "está", "mais", "são"]),
+    ("nl", &["het", "een", "niet", "van", "ik", "je", "zijn", "voor", "maar"]),
+];
+
+/// The language of `allowed` whose function words occur most, if one clearly leads.
+fn from_stop_words(text: &str, allowed: &[String]) -> Option<String> {
+    let mut votes: Vec<(&str, usize)> = Vec::new();
+    for (code, words) in STOP_WORDS {
+        if !allowed.iter().any(|a| a == code) {
+            continue;
+        }
+        let n = text.split_whitespace().filter(|w| words.contains(&w.to_lowercase().as_str())).count();
+        votes.push((code, n));
+    }
+    votes.sort_by_key(|v| std::cmp::Reverse(v.1));
+    match votes.as_slice() {
+        [(code, n)] if *n > 0 => Some(code.to_string()),
+        [(code, n), (_, m), ..] if n > m => Some(code.to_string()),
+        _ => None,
+    }
+}
+
+/// The best guess among `allowed` (the active languages plus English), when it can be trusted.
+fn restricted_guess(text: &str, allowed: &[String]) -> Option<String> {
+    if let Some(code) = from_stop_words(text, allowed) {
+        return Some(code);
+    }
+    let langs: Vec<Lang> = allowed.iter().filter_map(|c| LANGS.iter().find(|(k, _)| k == c).map(|(_, l)| *l)).collect();
+    let info = Detector::with_allowlist(langs).detect(text)?;
+    let trusted = info.is_reliable() || info.confidence() >= SHORT_MIN_CONFIDENCE || info.script() != whatlang::Script::Latin;
+    if trusted {
+        code_of(info.lang()).map(str::to_string)
+    } else {
+        None
+    }
+}
+
 fn code_known(code: &str) -> bool {
     LANGS.iter().any(|(c, _)| *c == code)
 }
 
 /// Detect with what we know about the user: the active languages and the last source language.
 ///
-/// * Long text: as [`detect_language`] (all languages; the caller reports "not installed").
+/// The text is cleaned first (symbols, digits and line breaks from OCR or copied web pages).
+///
+/// * Long text: as [`detect_language`] (all languages; the caller reports "not installed"). When
+///   that is unsure, the active languages plus English get a second chance: a plain English
+///   sentence often stays below the all-language confidence bar.
 /// * Short text: only the active languages plus English are candidates, a short list of common
 ///   words helps, and a weak guess falls back to `last` (the last detected or chosen source).
 ///   Short text is never "unsure"; only text without letters is [`Detection::NoText`].
@@ -160,12 +218,17 @@ pub fn detect_in_context(text: &str, active: &[String], last: Option<&str>) -> D
     if !text.chars().any(char::is_alphabetic) {
         return Detection::NoText;
     }
-    if !is_short(text) {
-        return detect_language(text);
-    }
+    let cleaned = clean_for_detection(text);
+    let text = cleaned.as_str();
     let mut allowed: Vec<String> = active.iter().filter(|c| code_known(c)).cloned().collect();
     if !allowed.iter().any(|c| c == "en") {
         allowed.push("en".into());
+    }
+    if !is_short(text) {
+        return match detect_language(text) {
+            Detection::Unsure => restricted_guess(text, &allowed).map_or(Detection::Unsure, Detection::Language),
+            found => found,
+        };
     }
     if allowed.len() == 1 {
         return Detection::Language(allowed.remove(0));
@@ -273,6 +336,44 @@ mod tests {
     fn other_scripts_are_recognized_among_the_active_languages() {
         assert_eq!(detect_in_context("شکریہ", &active(&["en", "ur"]), Some("en")), lang("ur"));
         assert_eq!(detect_in_context("شكرا", &active(&["en", "ar"]), Some("en")), lang("ar"));
+    }
+
+    #[test]
+    fn plain_english_sentences_are_not_unsure() {
+        // These stay below the detector's confidence bar when all 26 languages compete.
+        for text in [
+            "Hello, how are you today?",
+            "The quick brown fox jumps over the lazy dog.",
+            "Your text never leaves this computer.",
+            "Free software under the MIT license.",
+            "Language packs download only what you need",
+            "I can't wait to see you again soon",
+        ] {
+            assert_eq!(detect_in_context(text, &active(&["en", "de"]), Some("de")), lang("en"), "{text:?}");
+            assert_eq!(detect_in_context(text, &active(&["en"]), None), lang("en"), "{text:?} with only English");
+        }
+    }
+
+    /// What Windows OCR hands over for a clear English paragraph: a line per line, bullets, a stray bar.
+    #[test]
+    fn an_english_ocr_result_with_noise_is_detected() {
+        let ocr = "\u{2022} Your text never leaves\nthis computer. |\n\n  \u{00a9} 2026   -  Free software under\nthe MIT license.  12";
+        assert_eq!(detect_in_context(ocr, &active(&["en", "de"]), Some("de")), lang("en"));
+        assert_eq!(detect_in_context(ocr, &[], None), lang("en"));
+    }
+
+    #[test]
+    fn cleaning_keeps_letters_and_drops_symbols_digits_and_line_breaks() {
+        assert_eq!(clean_for_detection("\u{2022} Don't   stop |\n 3 well-known \u{00a9}"), "Don't stop well-known");
+        assert_eq!(clean_for_detection("123 ?!"), "");
+    }
+
+    #[test]
+    fn german_text_is_still_german_when_only_english_is_installed() {
+        let text = "Wir gehen morgen früh zusammen in den Park.";
+        assert_eq!(detect_in_context(text, &active(&["en"]), Some("en")), lang("de"));
+        let ocr = "\u{2022} Die Sonne scheint heute,\nund wir gehen am Nachmittag\ngemeinsam in den Park. |";
+        assert_eq!(detect_in_context(ocr, &active(&["en"]), Some("en")), lang("de"));
     }
 
     #[test]

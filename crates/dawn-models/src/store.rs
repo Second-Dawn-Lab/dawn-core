@@ -192,20 +192,45 @@ impl ModelStore {
 
     /// Download, verify, extract and register one model.
     ///
-    /// `on_step` gets the per-model download progress as `(done, total)` bytes.
+    /// The urls are tried in order. A url that fails to download, or that delivers a file whose
+    /// sha256 differs from the catalog, is skipped in favor of the next one; only when all of them
+    /// fail is the last error returned. `on_step` gets the per-model download progress as
+    /// `(done, total)` bytes.
     pub fn install_model(&self, model: &Model, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
-        if model.url.trim().is_empty() || model.url == "TBD" || model.sha256.is_empty() || model.sha256 == "TBD" {
+        let unpublished = |u: &String| u.trim().is_empty() || u == "TBD";
+        if model.urls.is_empty() || model.urls.iter().any(unpublished) || model.sha256.is_empty() || model.sha256 == "TBD" {
             return Err(ModelError::NotPublished(model.id.clone()));
         }
         let part = self.root.join(".downloads").join(format!("{}.zip.part", model.id));
-        download(&model.url, &part, opts.proxy, opts.cancel, &mut |done, total| on_step(StepKind::Downloading(done, total)))?;
+        let mut failure = None;
+        let mut verified = None;
+        for (i, url) in model.urls.iter().enumerate() {
+            let last = i + 1 == model.urls.len();
+            match download(url, &part, opts.proxy, opts.cancel, &mut |done, total| on_step(StepKind::Downloading(done, total))) {
+                Ok(()) => {}
+                Err(ModelError::Cancelled) => return Err(ModelError::Cancelled),
+                Err(err) => {
+                    failure = Some(err);
+                    // The last url keeps its partial file so a retry can resume; the others start over.
+                    if !last {
+                        let _ = fs::remove_file(&part);
+                    }
+                    continue;
+                }
+            }
 
-        on_step(StepKind::Verifying);
-        let actual = sha256_file(&part)?;
-        if !actual.eq_ignore_ascii_case(&model.sha256) {
+            on_step(StepKind::Verifying);
+            let actual = sha256_file(&part)?;
+            if actual.eq_ignore_ascii_case(&model.sha256) {
+                verified = Some(actual);
+                break;
+            }
             let _ = fs::remove_file(&part);
-            return Err(ModelError::Checksum { expected: model.sha256.clone(), actual });
+            failure = Some(ModelError::Checksum { expected: model.sha256.clone(), actual });
         }
+        let Some(actual) = verified else {
+            return Err(failure.unwrap_or_else(|| ModelError::NotPublished(model.id.clone())));
+        };
 
         on_step(StepKind::Extracting);
         let tmp = self.root.join(format!(".tmp-{}", model.id));
@@ -441,7 +466,8 @@ mod tests {
         let options = zip::write::SimpleFileOptions::default();
         if with_model_bin {
             zip.start_file("model.bin", options).unwrap();
-            zip.write_all(b"fake weights").unwrap();
+            // The name is part of the content, so archives with different names have different checksums.
+            zip.write_all(format!("fake weights {name}").as_bytes()).unwrap();
         }
         zip.start_file("source.spm", options).unwrap();
         zip.write_all(b"spm").unwrap();
@@ -451,12 +477,16 @@ mod tests {
         (path, sha, size)
     }
 
+    fn file_url(path: &Path) -> String {
+        format!("file:///{}", path.to_string_lossy().replace('\\', "/"))
+    }
+
     fn model(id: &str, sources: &[&str], targets: &[&str], archive: &Archive) -> Model {
         Model {
             id: id.into(),
             sources: sources.iter().map(|s| s.to_string()).collect(),
             targets: targets.iter().map(|s| s.to_string()).collect(),
-            url: format!("file:///{}", archive.0.to_string_lossy().replace('\\', "/")),
+            urls: vec![file_url(&archive.0)],
             size_bytes: archive.2,
             sha256: archive.1.clone(),
             license: "CC-BY-4.0".into(),
@@ -556,6 +586,97 @@ mod tests {
         assert!(!store.is_installed("en-de"));
     }
 
+    /// A model with the given urls in order; `good` is the archive the checksum describes.
+    fn with_urls(good: &Archive, urls: Vec<String>) -> Model {
+        Model { urls, ..model("en-de", &["en"], &["de"], good) }
+    }
+
+    #[test]
+    fn a_failing_url_falls_back_to_the_next_one() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let missing = file_url(&dir.join("does-not-exist.zip"));
+        let m = with_urls(&good, vec![missing, file_url(&good.0)]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+
+        store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap();
+        assert!(store.is_installed("en-de"));
+        assert!(store.model_dir("en-de").join("model.bin").exists());
+    }
+
+    #[test]
+    fn a_url_with_the_wrong_content_is_skipped_and_its_download_deleted() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let other = make_archive(&dir, "other", true);
+        let m = with_urls(&good, vec![file_url(&other.0), file_url(&good.0)]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+
+        store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap();
+        assert!(store.is_installed("en-de"));
+        assert_eq!(store.installed_models()[0].sha256, good.1, "the installed file is the verified one");
+    }
+
+    #[test]
+    fn urls_are_tried_in_order_and_later_ones_are_not_touched_after_success() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let other = make_archive(&dir, "other", true);
+        let m = with_urls(&good, vec![file_url(&good.0), file_url(&other.0)]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+
+        let mut downloads = 0;
+        store
+            .install_model(&m, &opts(&cancel), &mut |step| {
+                if let StepKind::Downloading(0, _) = step {
+                    downloads += 1;
+                }
+            })
+            .unwrap();
+        assert_eq!(downloads, 1, "only the first url was used");
+    }
+
+    #[test]
+    fn when_every_url_has_the_wrong_content_the_checksum_error_is_returned() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let other = make_archive(&dir, "other", true);
+        let third = make_archive(&dir, "third", true);
+        let m = with_urls(&good, vec![file_url(&other.0), file_url(&third.0)]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+
+        let err = store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap_err();
+        assert_eq!(err.code(), "checksum");
+        assert!(!store.root().join(".downloads").join("en-de.zip.part").exists());
+        assert!(!store.is_installed("en-de"));
+    }
+
+    #[test]
+    fn when_every_url_is_unreachable_the_network_error_is_returned() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let m = with_urls(&good, vec![file_url(&dir.join("a.zip")), file_url(&dir.join("b.zip"))]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+
+        let err = store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap_err();
+        assert_eq!(err.code(), "network");
+    }
+
+    #[test]
+    fn a_model_without_urls_is_unpublished() {
+        let dir = temp_dir();
+        let good = make_archive(&dir, "en-de", true);
+        let m = with_urls(&good, vec![]);
+        let store = ModelStore::new(dir.join("store"));
+        let cancel = AtomicBool::new(false);
+        assert_eq!(store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap_err().code(), "not_published");
+    }
+
     #[test]
     fn archive_without_model_bin_is_rejected() {
         let dir = temp_dir();
@@ -573,7 +694,7 @@ mod tests {
         let dir = temp_dir();
         let archive = make_archive(&dir, "x", true);
         let mut m = model("x", &["en"], &["de"], &archive);
-        m.url = "TBD".into();
+        m.urls = vec!["TBD".into()];
         let store = ModelStore::new(dir.join("store"));
         let cancel = AtomicBool::new(false);
         assert_eq!(store.install_model(&m, &opts(&cancel), &mut |_| {}).unwrap_err().code(), "not_published");

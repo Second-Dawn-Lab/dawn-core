@@ -39,8 +39,9 @@ pub struct Model {
     pub sources: Vec<String>,
     /// Languages the model writes.
     pub targets: Vec<String>,
-    /// `https://` or `file://`.
-    pub url: String,
+    /// Where to download the archive, tried in order; every download is verified against `sha256`.
+    /// `https://` or `file://`. A mirror (e.g. GitHub Releases) is added by appending another url.
+    pub urls: Vec<String>,
     pub size_bytes: u64,
     pub sha256: String,
     pub license: String,
@@ -124,14 +125,14 @@ mod tests {
     const SAMPLE: &str = r#"{
       "version": 2, "hub": "en",
       "models": [
-        { "id": "en-de", "sources": ["en"], "targets": ["de"], "url": "file:///x/en-de.zip",
+        { "id": "en-de", "sources": ["en"], "targets": ["de"], "urls": ["file:///x/en-de.zip"],
           "sizeBytes": 100, "sha256": "aa", "license": "CC-BY-4.0", "attribution": "Helsinki-NLP / OPUS-MT" },
-        { "id": "de-en", "sources": ["de"], "targets": ["en"], "url": "https://example.org/de-en.zip",
+        { "id": "de-en", "sources": ["de"], "targets": ["en"], "urls": ["https://example.org/de-en.zip"],
           "sizeBytes": 50, "sha256": "bb", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT" },
-        { "id": "inc", "sources": ["en", "de"], "targets": ["ur", "hi"], "url": "file:///x/inc.zip",
+        { "id": "inc", "sources": ["en", "de"], "targets": ["ur", "hi"], "urls": ["file:///x/inc.zip"],
           "sizeBytes": 250, "sha256": "cc", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT",
           "targetTokens": { "ur": ">>urd<<", "hi": ">>hin<<" } },
-        { "id": "inc-en", "sources": ["ur", "hi"], "targets": ["en"], "url": "file:///x/inc-en.zip",
+        { "id": "inc-en", "sources": ["ur", "hi"], "targets": ["en"], "urls": ["file:///x/inc-en.zip"],
           "sizeBytes": 250, "sha256": "dd", "license": "Apache-2.0", "attribution": "Helsinki-NLP / OPUS-MT" }
       ],
       "languages": [
@@ -209,6 +210,26 @@ mod tests {
         }
         for m in &catalog.models {
             assert!(!m.sources.is_empty() && !m.targets.is_empty(), "{} serves nothing", m.id);
+        }
+    }
+
+    /// A url that points at "main" (or any moving ref) could return a different file than the sha256
+    /// describes. Bundled urls must be https and, on Hugging Face, pinned to a 40-digit commit hash.
+    #[test]
+    fn bundled_catalog_urls_are_https_and_pinned_to_a_commit() {
+        let catalog = Catalog::bundled();
+        assert!(!catalog.models.is_empty());
+        for m in &catalog.models {
+            assert!(!m.urls.is_empty(), "{} has no url", m.id);
+            for url in &m.urls {
+                assert!(url.starts_with("https://"), "{}: {url} is not https", m.id);
+                assert!(!url.contains("/resolve/main/") && !url.contains("/releases/latest/"), "{}: {url} is not pinned", m.id);
+                if let Some(rest) = url.strip_prefix("https://huggingface.co/") {
+                    let commit = rest.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+                    assert!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "{}: {url} lacks a commit hash", m.id);
+                    assert!(url.ends_with(&format!("/{}.zip", m.id)), "{}: {url} names another file", m.id);
+                }
+            }
         }
     }
 

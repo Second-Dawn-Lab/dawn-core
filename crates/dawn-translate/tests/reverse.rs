@@ -123,7 +123,7 @@ fn reverse_models() {
             id: id.to_string(),
             sources: vec![source.to_string()],
             targets: vec![target.to_string()],
-            url: format!("file:///{}", zip.to_string_lossy().replace('\\', "/")),
+            urls: vec![format!("file:///{}", zip.to_string_lossy().replace('\\', "/"))],
             size_bytes: std::fs::metadata(&zip).unwrap().len(),
             sha256: dawn_models::sha256_file(&zip).unwrap(),
             license: "Apache-2.0".into(),

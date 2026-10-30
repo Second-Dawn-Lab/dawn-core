@@ -1,5 +1,6 @@
-//! End-to-end tests with real models. They need the models converted by
-//! `tools/convert-models` (de, ur and hi) and the matching `file://` urls in `models/catalog.json`:
+//! End-to-end tests with real models. They install German, Urdu and Hindi into a throwaway store
+//! from the bundled catalog, so they download about 600 MB from the commit-pinned Hugging Face urls
+//! (the same code path as the app's "Language packs" page):
 //!
 //! ```text
 //! cargo test -p dawn-translate --test integration -- --ignored --nocapture
@@ -13,7 +14,7 @@ use std::time::Instant;
 use dawn_models::{Catalog, InstallOptions, ModelStore};
 use dawn_translate::{Ct2Engine, Ct2Options, TranslationEngine};
 
-/// A throwaway store with German and Urdu installed from the catalog's `file://` urls.
+/// A throwaway store with German, Urdu and Hindi downloaded from the catalog's urls.
 fn engine() -> &'static Ct2Engine {
     static ENGINE: OnceLock<Ct2Engine> = OnceLock::new();
     ENGINE.get_or_init(|| {
@@ -39,7 +40,7 @@ fn translate(text: &str, from: &str, to: &str) -> (String, bool) {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn english_to_german() {
     let (text, pivoted) = translate("Hello, how are you?", "en", "de");
     assert!(!pivoted);
@@ -47,7 +48,7 @@ fn english_to_german() {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn german_to_english() {
     let (text, pivoted) = translate("Hallo, wie geht es dir?", "de", "en");
     assert!(!pivoted);
@@ -55,7 +56,7 @@ fn german_to_english() {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn english_to_urdu_and_back() {
     let (urdu, _) = translate("Hello, how are you?", "en", "ur");
     assert!(urdu.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)), "expected Arabic-script Urdu: {urdu}");
@@ -63,7 +64,7 @@ fn english_to_urdu_and_back() {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn german_to_urdu_is_direct_and_urdu_to_german_pivots() {
     // The multilingual -inc model reads German, so de->ur needs no pivot ...
     let (_, pivoted) = translate("Hallo, wie geht es dir?", "de", "ur");
@@ -76,7 +77,7 @@ fn german_to_urdu_is_direct_and_urdu_to_german_pivots() {
 }
 
 #[test]
-#[ignore = "needs converted models; prints samples"]
+#[ignore = "downloads the packs from Hugging Face; prints samples"]
 fn urdu_and_hindi_samples() {
     let sentences = [
         "Good morning! How did you sleep last night?",
@@ -103,7 +104,7 @@ fn urdu_and_hindi_samples() {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn multi_line_text_keeps_its_lines() {
     let (text, _) = translate("Good morning.\n\nSee you tomorrow. Have a nice day!", "en", "de");
     assert_eq!(text.lines().count(), 3, "{text:?}");
@@ -111,7 +112,7 @@ fn multi_line_text_keeps_its_lines() {
 }
 
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn engine_reports_supported_pairs() {
     let pairs = engine().supported_pairs();
     assert_eq!(pairs.len(), 12, "{pairs:?}");
@@ -119,7 +120,7 @@ fn engine_reports_supported_pairs() {
 
 /// Arabic needs the `>>ara<<` token; Turkish uses the transformer-big `opus-mt-tc-big-en-tr`.
 #[test]
-#[ignore = "needs converted models"]
+#[ignore = "downloads the packs from Hugging Face"]
 fn arabic_and_turkish() {
     let root: PathBuf = std::env::temp_dir().join(format!("dawn-it-store-art-{}", std::process::id()));
     let store = ModelStore::new(root);

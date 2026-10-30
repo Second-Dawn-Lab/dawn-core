@@ -171,7 +171,7 @@ def convert_one(src: str, dst: str, info: dict, out: Path, work: Path) -> dict:
         "id": model_id,
         "from": src,
         "to": dst,
-        "url": archive.resolve().as_uri(),
+        "urls": [archive.resolve().as_uri()],
         "sizeBytes": archive.stat().st_size,
         "sha256": sha256_of(archive),
         "license": manifest_license,

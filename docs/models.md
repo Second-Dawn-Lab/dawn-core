@@ -22,7 +22,7 @@ Models and languages are listed separately, so several languages can use the sam
   "hub": "en",
   "models": [
     { "id": "opus-mt-en-de-ct2-int8", "sources": ["en"], "targets": ["de"],
-      "url": "https://example.org/opus-mt-en-de-ct2-int8.zip", "sizeBytes": 62910771, "sha256": "d47a029d...",
+      "urls": ["https://huggingface.co/Second-Dawn-Lab/owll-language-packs/resolve/<commit>/opus-mt-en-de-ct2-int8.zip"], "sizeBytes": 62910771, "sha256": "d47a029d...",
       "license": "CC-BY-4.0", "attribution": "Helsinki-NLP / OPUS-MT" },
     { "id": "opus-mt-tc-bible-big-inc-ct2-int8", "sources": ["en", "de", "fr", "es", "pt"], "targets": ["ur", "hi", "pa", "bn"],
       "targetTokens": { "ur": ">>urd<<", "hi": ">>hin<<", "pa": ">>pan<<", "bn": ">>ben<<" }, "...": "..." }
@@ -40,10 +40,32 @@ Models and languages are listed separately, so several languages can use the sam
 - `installed.json` records which languages are active as well as which models exist; having a model on disk because another language needs it does not make a language active.
 - **Direct pairs:** the router picks the most specialized installed model that serves the pair, so German to Urdu is translated directly by the multilingual model; only pairs no model serves (for example Urdu to German) go through English.
 - `targetTokens` (or `prefix` for a single-target model) is the token that selects the target language, put in front of every source sentence as **one vocabulary token**. If the token is not in the model's vocabulary it is passed as plain text (older Opus-MT models such as English to Arabic).
-- `url` is `https://` or `file://`. `sha256` is checked before anything is installed; a mismatch deletes the download and shows an error.
+- `urls` is a list of `https://` (or, for local testing, `file://`) locations, tried in order. `sha256` is checked after **every** download; a url that fails or delivers different content is skipped and the next one is tried, and only when all fail is an error shown. Hugging Face urls must be pinned to a commit (`/resolve/<commit>/...`, never `/resolve/main/...`), so a url always returns exactly the file its sha256 describes; a unit test enforces this for the bundled catalog.
 - `beta` (optional, on a language) marks a language whose translations are known to be unreliable (a "Beta" badge with the tooltip "Translation quality may be unreliable").
 
 The catalog is compiled into the app (`include_str!`), so rebuild after editing it. Older version 1 catalogs (models inline in each language) are migrated by `tools/convert-models/catalog_tools.py`.
+
+## Hosting the packs
+
+The packs live in the public Hugging Face model repo **[Second-Dawn-Lab/owll-language-packs](https://huggingface.co/Second-Dawn-Lab/owll-language-packs)**. Every catalog url is pinned to the commit of the upload (`.../resolve/<40-digit commit>/<pack>.zip`), never `main`, so a url always returns exactly the file its `sha256` describes. To publish new or changed packs:
+
+1. Convert (see below) and copy the zips the catalog references into `tools/convert-models/out/`.
+2. `python tools/convert-models/make_model_card.py` writes `out/README.md` (the model card, generated from the catalog).
+3. `hf upload Second-Dawn-Lab/owll-language-packs tools/convert-models/out . --repo-type model` (one commit). Never put a token in a file; `hf auth login` stores it outside the repo.
+4. Put the new commit hash into the `urls` of the changed models and update `size`/`sha256` if the file changed. `cargo test -p dawn-models` fails if a url is not https, points at `/resolve/main/`, or lacks a commit hash.
+
+### Adding a mirror (for example GitHub Releases)
+
+`urls` is tried in order, with the checksum verified after every download, so a mirror needs no code change: upload the same zip to a GitHub release and append its url.
+
+```json
+"urls": [
+  "https://huggingface.co/Second-Dawn-Lab/owll-language-packs/resolve/<commit>/opus-mt-en-de-ct2-int8.zip",
+  "https://github.com/Second-Dawn-Lab/owll-language-packs/releases/download/v1/opus-mt-en-de-ct2-int8.zip"
+]
+```
+
+Use release asset urls with a tag (never `releases/latest/...`). GitHub release assets are limited to 2 GB per file, which the packs are well below.
 
 ## Converting models
 
