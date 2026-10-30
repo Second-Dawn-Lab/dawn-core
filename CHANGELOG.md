@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.2.0...v0.3.0) (2026-10-30)
+
+
+### Features
+
+* editable document segments, save edits with re-open check, drafts ([daa6234](https://github.com/Second-Dawn-Lab/dawn-core/commit/daa62344ed4bfc18b0fc14568210db63dff59f77))
+
 ## [0.2.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.1.1...v0.2.0) (2026-10-30)
 
 
