@@ -1,0 +1,26 @@
+name: Release
+
+# dawn-core has no installer. release-please keeps a "Release PR" open that writes CHANGELOG.md from the
+# Conventional Commit messages; merging it creates the tag (for example v0.1.0) and the GitHub release.
+# Those tags are what the apps put in their dawn-core.ref. See owll/docs/releasing.md.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit (v5.0.0). RELEASE_PLEASE_TOKEN is optional: with the default token the Release PR
+      # does not run CI (GitHub does not start workflows for events made by GITHUB_TOKEN).
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
