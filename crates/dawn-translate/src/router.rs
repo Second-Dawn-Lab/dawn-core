@@ -252,6 +252,33 @@ pub struct Router<R, N> {
     glossary: RwLock<Arc<Glossary>>,
 }
 
+/// Does `input` carry placeholders (the fallback strategy) rather than the target terms themselves?
+fn reads_placeholders(p: &Protected, input: &str) -> bool {
+    p.terms.first().is_some_and(|(token, _)| input.contains(token.as_str()))
+}
+
+/// A model output for a sentence with glossary terms, made to match the glossary: placeholders are put
+/// back, target terms written exactly as in the glossary. None when a term is still broken.
+fn enforce_terms(p: &Protected, input: &str, text: &str) -> Option<String> {
+    if p.terms.is_empty() {
+        return Some(text.to_string());
+    }
+    if reads_placeholders(p, input) {
+        let restored = restore(text, p);
+        return (restored.missing == 0).then_some(restored.text);
+    }
+    p.all_terms_in(text).then(|| exact_terms(text, p))
+}
+
+/// The same for a piece of a sentence (a word, the rest after it): fixed where it holds a term, otherwise unchanged.
+fn enforce_fragment(p: &Protected, input: &str, text: &str) -> String {
+    if reads_placeholders(p, input) {
+        restore(text, p).text
+    } else {
+        exact_terms(text, p)
+    }
+}
+
 impl<R: Resolver, N: Runner> Router<R, N> {
     pub fn new(resolver: R, runner: N, hub: impl Into<String>) -> Self {
         Self {
@@ -303,27 +330,67 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
     }
 
-    /// Up to `count` whole-sentence alternatives for the translation of `input`, different from `current`.
-    pub fn sentence_alternatives(&self, from: &str, to: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
+    /// The glossary's view of `source`: the terms its translation has to contain.
+    fn protected_for(&self, from: &str, to: &str, source: &str) -> Protected {
+        let glossary = self.glossary.read().unwrap_or_else(|e| e.into_inner()).clone();
+        protect(source, &glossary.for_pair(from, to))
+    }
+
+    /// Up to `count` whole-sentence alternatives for the translation of `input` (what the model read for the
+    /// sentence `source`), different from `current`. The glossary applies as it does to the translation itself:
+    /// terms are written exactly, and an alternative that still breaks a term is dropped.
+    pub fn sentence_alternatives(&self, from: &str, to: &str, source: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
         let last_from = match self.plan(from, to)? {
             Plan::Same => return Ok(Vec::new()),
             Plan::Direct(_) => from.to_string(),
             Plan::Pivot(..) => self.hub.clone(),
         };
         let model = self.resolver.resolve(&last_from, to).ok_or_else(|| TranslateError::ModelMissing(to.to_string()))?;
-        self.runner.sentence_alternatives(&model, input, current, count)
+        let p = self.protected_for(from, to, source);
+        // Ask for a few more: some may be dropped.
+        let found = self.runner.sentence_alternatives(&model, input, current, count + 3)?;
+        let mut out: Vec<String> = Vec::new();
+        for text in found {
+            if let Some(text) = enforce_terms(&p, input, &text) {
+                if text != current && !out.contains(&text) {
+                    out.push(text);
+                }
+            }
+        }
+        out.truncate(count);
+        Ok(out)
     }
 
     /// Alternatives for the word that follows `prefix` in the translation of `input`, where `input` is
-    /// what the last model stage read (`Segment::input`).
-    pub fn alternatives(&self, from: &str, to: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
+    /// what the last model stage read (`Segment::input`) for the sentence `source`. Glossary terms are
+    /// enforced as in [`Router::sentence_alternatives`].
+    pub fn alternatives(&self, from: &str, to: &str, source: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
         let last_from = match self.plan(from, to)? {
             Plan::Same => return Ok(Vec::new()),
             Plan::Direct(_) => from.to_string(),
             Plan::Pivot(..) => self.hub.clone(),
         };
         let model = self.resolver.resolve(&last_from, to).ok_or_else(|| TranslateError::ModelMissing(to.to_string()))?;
-        self.runner.alternatives(&model, input, sentence, word_start, current_word, limit)
+        let p = self.protected_for(from, to, source);
+        if p.terms.is_empty() {
+            return self.runner.alternatives(&model, input, sentence, word_start, current_word, limit);
+        }
+        let found = self.runner.alternatives(&model, input, sentence, word_start, current_word, limit + 4)?;
+        let mut out = Vec::new();
+        for mut alt in found {
+            if !alt.current {
+                let Some(text) = enforce_terms(&p, input, &alt.text) else { continue };
+                alt.text = text;
+                alt.word = enforce_fragment(&p, input, &alt.word);
+                alt.preview = enforce_fragment(&p, input, &alt.preview);
+            }
+            // Writing a term exactly can make two alternatives the same sentence.
+            if !out.iter().any(|o: &Alternative| o.text == alt.text) {
+                out.push(alt);
+            }
+        }
+        out.truncate(limit);
+        Ok(out)
     }
 
     pub fn runner(&self) -> &N {
@@ -978,5 +1045,37 @@ mod tests {
         let t = &out.glossary_terms[0];
         assert_eq!(&out.text[t.start..t.end], "Eule");
         assert_eq!(t.source, "owl");
+    }
+
+    /// Alternatives as a model gives them for a sentence with the term "xsdcv": some spell it wrong or capitalize it.
+    struct SpellsTermWrong;
+    impl Runner for SpellsTermWrong {
+        fn run(&self, _m: &ModelSpec, sentences: &[String], _b: usize) -> Result<Vec<String>, TranslateError> {
+            Ok(sentences.to_vec())
+        }
+        fn sentence_alternatives(&self, _m: &ModelSpec, _source: &str, _current: &str, _count: usize) -> Result<Vec<String>, TranslateError> {
+            Ok(["I'm xsddcv.", "I'm Xsdcv.", "I'm surprised.", "I'm xsdcv!"].map(String::from).to_vec())
+        }
+        fn alternatives(&self, _m: &ModelSpec, _source: &str, _sentence: &str, _start: usize, _word: &str, _limit: usize) -> Result<Vec<Alternative>, TranslateError> {
+            let alt = |word: &str, text: &str, current: bool| Alternative { word: word.into(), text: text.into(), preview: format!("{word}."), score: 0.0, current };
+            Ok(vec![alt("xsdcv", "I'm xsdcv.", true), alt("xsddcv", "I'm xsddcv.", false), alt("Xsdcv", "I'm Xsdcv.", false), alt("surprised", "I'm surprised.", false)])
+        }
+    }
+
+    #[test]
+    fn alternatives_follow_the_glossary_like_the_translation_does() {
+        let r = Router::new(FakeResolver(ALL.iter().copied().collect()), SpellsTermWrong, "en");
+        r.set_glossary(glossary(vec![entry("astonished", "xsdcv")]));
+        let out = r.translate("I'm astonished.", "en", "de", &no_cancel()).unwrap();
+        let seg = &out.segments[0];
+        // Whole sentences: the misspelling and the sentence without the term are dropped, "Xsdcv" is written exactly.
+        let sentences = r.sentence_alternatives("en", "de", &seg.source, &seg.input, &seg.target, 3).unwrap();
+        assert_eq!(sentences, vec!["I'm xsdcv!".to_string()], "got {sentences:?}");
+        // Words: the same; the current word stays.
+        let words = r.alternatives("en", "de", &seg.source, &seg.input, &seg.target, 4, "xsdcv", 10).unwrap();
+        assert_eq!(words.iter().map(|a| a.word.as_str()).collect::<Vec<_>>(), vec!["xsdcv"], "got {words:?}");
+        // Without the term in the sentence nothing is filtered.
+        let plain = r.alternatives("en", "de", "I'm surprised.", "I'm surprised.", "I'm surprised.", 4, "surprised", 10).unwrap();
+        assert_eq!(plain.len(), 4);
     }
 }

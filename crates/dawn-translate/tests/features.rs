@@ -43,7 +43,7 @@ fn show(e: &Ct2Engine, source: &str, word: usize) -> Vec<dawn_translate::Alterna
     let seg = &out.segments[0];
     let (start, current) = word_offset(&seg.target, word);
     let started = Instant::now();
-    let alts = e.alternatives("en", "de", &seg.input, &seg.target, start, &current, 10).unwrap();
+    let alts = e.alternatives("en", "de", &seg.source, &seg.input, &seg.target, start, &current, 10).unwrap();
     println!("\n{source:?} -> {:?}, word {word} ({current:?}): {} alternatives in {} ms", seg.target, alts.len(), started.elapsed().as_millis());
     for a in &alts {
         println!("   {}{:<14} {:>6.2}  {}", if a.current { "*" } else { " " }, a.word, a.score, a.preview);
@@ -99,7 +99,7 @@ fn regression_multi_piece_word_and_punctuation() {
     let out = translate("Yes, the weather is nice today.", "en", "de");
     let seg = &out.segments[0];
     let (start, current) = word_offset(&seg.target, 1);
-    let alts = e.alternatives("en", "de", &seg.input, &seg.target, start, &current, 10).unwrap();
+    let alts = e.alternatives("en", "de", &seg.source, &seg.input, &seg.target, start, &current, 10).unwrap();
     println!("\nafter the comma ({current:?}): {:?}", alts.iter().map(|a| a.word.as_str()).collect::<Vec<_>>());
     let prefix = &seg.target[..seg.target.find(&current).unwrap()];
     assert!(alts.iter().all(|a| a.text.starts_with(prefix.trim_end())), "prefix {prefix:?} kept: {alts:?}");
@@ -112,7 +112,7 @@ fn a_picked_alternative_sticks_through_retranslation_until_the_source_changes() 
     let sentence = "The cat sleeps on the sofa.";
     let first = translate(sentence, "en", "de");
     let seg = &first.segments[0];
-    let alts = e.alternatives("en", "de", &seg.input, &seg.target, 0, "Die", 10).unwrap();
+    let alts = e.alternatives("en", "de", &seg.source, &seg.input, &seg.target, 0, "Die", 10).unwrap();
     let pick = alts.iter().find(|a| a.text != seg.target).expect("a different alternative").clone();
     e.pin("en", "de", &seg.source, &seg.input, &pick.text);
 
@@ -289,7 +289,7 @@ fn a_glossary_term_wins_over_an_earlier_pick_and_a_made_up_word_survives() {
     e.set_glossary(Glossary::default());
     let first = translate("I'm astonished.", "en", "de");
     let seg = &first.segments[0];
-    let alts = e.alternatives("en", "de", &seg.input, &seg.target, dawn_translate::word_bounds_all(&seg.target)[2].0, "erstaunt", 10).unwrap();
+    let alts = e.alternatives("en", "de", &seg.source, &seg.input, &seg.target, dawn_translate::word_bounds_all(&seg.target)[2].0, "erstaunt", 10).unwrap();
     let pick = alts.iter().find(|a| !a.current && a.word == "überrascht").expect("überrascht is offered");
     e.pin("en", "de", &seg.source, &seg.input, &pick.text);
     assert_eq!(translate("I'm astonished.", "en", "de").text, pick.text);
@@ -311,7 +311,7 @@ fn sentence_alternatives_are_different_whole_sentences() {
     let e = engine();
     let out = translate("I'm astonished.", "en", "de");
     let seg = &out.segments[0];
-    let alts = e.sentence_alternatives("en", "de", &seg.input, &seg.target, 3).unwrap();
+    let alts = e.sentence_alternatives("en", "de", &seg.source, &seg.input, &seg.target, 3).unwrap();
     println!("{:?} -> {alts:?}", seg.target);
     assert!(!alts.is_empty() && alts.len() <= 3);
     assert!(alts.iter().all(|a| a != &seg.target));

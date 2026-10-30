@@ -344,13 +344,13 @@ impl Ct2Engine {
     }
 
     /// Alternatives for the word that starts at UTF-16 offset `word_start` of `sentence`, the translation of `input` (see `Segment::input`).
-    pub fn alternatives(&self, from: &str, to: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
-        self.router.alternatives(from, to, input, sentence, word_start, current_word, limit)
+    pub fn alternatives(&self, from: &str, to: &str, source: &str, input: &str, sentence: &str, word_start: usize, current_word: &str, limit: usize) -> Result<Vec<Alternative>, TranslateError> {
+        self.router.alternatives(from, to, source, input, sentence, word_start, current_word, limit)
     }
 
     /// Up to `count` whole-sentence alternatives for the translation of `input`, different from `current`.
-    pub fn sentence_alternatives(&self, from: &str, to: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
-        self.router.sentence_alternatives(from, to, input, current, count)
+    pub fn sentence_alternatives(&self, from: &str, to: &str, source: &str, input: &str, current: &str, count: usize) -> Result<Vec<String>, TranslateError> {
+        self.router.sentence_alternatives(from, to, source, input, current, count)
     }
 
     /// Keep the user's pick for a sentence through later translations of the same source sentence.
