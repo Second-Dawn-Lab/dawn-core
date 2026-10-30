@@ -8,6 +8,7 @@
 use anyhow::Result;
 
 pub mod choose;
+pub mod fix;
 pub mod join;
 pub mod scale;
 #[cfg(windows)]

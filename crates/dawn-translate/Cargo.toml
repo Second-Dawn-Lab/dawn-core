@@ -12,6 +12,9 @@ serde_json.workspace = true
 dawn-models = { path = "../dawn-models" }
 # CPU-only CTranslate2. `sentencepiece` is the tokenizer Marian/Opus-MT models need.
 ct2rs = { version = "0.10", default-features = false, features = ["sentencepiece"] }
+# Encodes the translated prefix with the model's target vocabulary (word alternatives). Same crate and
+# features as ct2rs already uses, so nothing new is compiled.
+sentencepiece = "0.13"
 # Small statistical language detector, no model download.
 whatlang = "0.16"
 

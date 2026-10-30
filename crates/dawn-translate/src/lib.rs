@@ -5,8 +5,10 @@
 //! * [`StubEngine`]: a fake for tests and UI work.
 //! * [`detect_language`]: language detection over all known languages.
 
+mod alternatives;
 mod ct2;
 mod detect;
+mod glossary;
 mod lang_token;
 mod router;
 mod split;
@@ -15,11 +17,13 @@ use std::{thread, time::Duration};
 
 use anyhow::{bail, Result};
 
+pub use alternatives::{dedupe as dedupe_alternatives, first_word_pieces, word_bounds, Alternative};
+pub use glossary::{placeholder, protect, restore, Glossary, GlossaryEntry, Protected, Restored};
 pub use ct2::{default_threads, Ct2Engine, Ct2Options, Ct2Runner, StoreResolver};
 pub use detect::{detect_in_context, detect_language, is_short, Detection};
 pub use lang_token::{language_tokens, split_language_token, LangTokenizer};
 pub use split::{join_document, split_document, split_sentences};
-pub use router::{ModelSpec, Pass, Plan, Resolver, Router, Runner, TranslateError, TranslateOptions, Translation, Update};
+pub use router::{ModelSpec, Pass, Plan, Resolver, Router, Runner, Segment, TranslateError, TranslateOptions, Translation, Update};
 
 /// A translation backend.
 pub trait TranslationEngine {

@@ -14,8 +14,10 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, RwLock};
 
+use crate::alternatives::Alternative;
+use crate::glossary::{protect, restore, Glossary, Protected};
 use crate::split::{join_document, split_document};
 
 /// An installed model ready to be loaded.
@@ -34,6 +36,13 @@ pub trait Resolver: Send + Sync {
 pub trait Runner: Send + Sync {
     /// Translate a batch of sentences with one model at the given beam size.
     fn run(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError>;
+
+    /// Up to `count` ways to continue the translation of `source` after `prefix` (the part of the
+    /// translation before the clicked word; empty for the first word). Engines that cannot do this
+    /// say so, and the app hides the feature.
+    fn alternatives(&self, _model: &ModelSpec, _source: &str, _prefix: &str, _count: usize) -> Result<Vec<Alternative>, TranslateError> {
+        Err(TranslateError::Engine("this engine cannot suggest alternatives".into()))
+    }
 }
 
 #[derive(Debug)]
@@ -75,6 +84,32 @@ pub struct Translation {
     pub text: String,
     /// The text went through English (`from -> en -> to`).
     pub pivoted: bool,
+    /// The translated sentences in order, for word alternatives (empty when there is nothing to pick from).
+    pub segments: Vec<Segment>,
+    /// How many glossary terms were put into the text.
+    pub glossary_hits: usize,
+}
+
+impl Translation {
+    fn plain(text: &str, pivoted: bool) -> Self {
+        Self { text: text.to_string(), pivoted, segments: Vec::new(), glossary_hits: 0 }
+    }
+}
+
+/// One translated sentence and where it sits in the final text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Segment {
+    /// The source sentence.
+    pub source: String,
+    /// What the last model stage read: the source, or the English sentence of a pivoted translation.
+    pub input: String,
+    /// The finished translation of the sentence.
+    pub target: String,
+    /// Position of `target` in [`Translation::text`], in UTF-16 units (what JavaScript indexes by).
+    pub start: usize,
+    pub end: usize,
+    /// The sentence was chosen by the user from the alternatives and stays as it is.
+    pub pinned: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -177,16 +212,73 @@ impl SentenceCache {
     }
 }
 
+/// Sentences the user picked from the word alternatives: (from, to, source sentence) -> (input of the
+/// last stage, translation). They win over the model and survive re-translation while the user types,
+/// until the source sentence itself changes.
+#[derive(Default)]
+struct Pins {
+    map: HashMap<(String, String, String), (String, String)>,
+    order: VecDeque<(String, String, String)>,
+}
+
+const MAX_PINS: usize = 512;
+
 pub struct Router<R, N> {
     resolver: R,
     runner: N,
     hub: String,
     cache: Mutex<SentenceCache>,
+    pins: Mutex<Pins>,
+    glossary: RwLock<Arc<Glossary>>,
 }
 
 impl<R: Resolver, N: Runner> Router<R, N> {
     pub fn new(resolver: R, runner: N, hub: impl Into<String>) -> Self {
-        Self { resolver, runner, hub: hub.into(), cache: Mutex::new(SentenceCache::new(4096)) }
+        Self {
+            resolver,
+            runner,
+            hub: hub.into(),
+            cache: Mutex::new(SentenceCache::new(4096)),
+            pins: Mutex::new(Pins::default()),
+            glossary: RwLock::new(Arc::new(Glossary::default())),
+        }
+    }
+
+    /// Use this glossary from now on. Cached sentences stay valid: they are keyed by the protected
+    /// sentence, so a changed term simply gives a new key.
+    pub fn set_glossary(&self, glossary: Glossary) {
+        *self.glossary.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(glossary);
+    }
+
+    /// Remember the user's pick for a sentence (see [`Pins`]).
+    pub fn pin(&self, from: &str, to: &str, source: &str, input: &str, translation: &str) {
+        let key = (from.to_string(), to.to_string(), source.to_string());
+        let mut pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
+        if pins.map.insert(key.clone(), (input.to_string(), translation.to_string())).is_none() {
+            pins.order.push_back(key);
+        }
+        while pins.order.len() > MAX_PINS {
+            if let Some(oldest) = pins.order.pop_front() {
+                pins.map.remove(&oldest);
+            }
+        }
+    }
+
+    fn pinned(&self, from: &str, to: &str, source: &str) -> Option<(String, String)> {
+        let pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
+        pins.map.get(&(from.to_string(), to.to_string(), source.to_string())).cloned()
+    }
+
+    /// Alternatives for the word that follows `prefix` in the translation of `input`, where `input` is
+    /// what the last model stage read (`Segment::input`).
+    pub fn alternatives(&self, from: &str, to: &str, input: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
+        let last_from = match self.plan(from, to)? {
+            Plan::Same => return Ok(Vec::new()),
+            Plan::Direct(_) => from.to_string(),
+            Plan::Pivot(..) => self.hub.clone(),
+        };
+        let model = self.resolver.resolve(&last_from, to).ok_or_else(|| TranslateError::ModelMissing(to.to_string()))?;
+        self.runner.alternatives(&model, input, prefix, count)
     }
 
     pub fn runner(&self) -> &N {
@@ -196,6 +288,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
     /// Forget cached sentences (e.g. after a language pack was removed or repaired).
     pub fn clear_cache(&self) {
         *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = SentenceCache::new(4096);
+        *self.pins.lock().unwrap_or_else(|e| e.into_inner()) = Pins::default();
     }
 
     pub fn plan(&self, from: &str, to: &str) -> Result<Plan, TranslateError> {
@@ -236,7 +329,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         on_update: &mut dyn FnMut(Update),
     ) -> Result<Translation, TranslateError> {
         let (stages, pivoted) = match self.plan(from, to)? {
-            Plan::Same => return Ok(Translation { text: text.to_string(), pivoted: false }),
+            Plan::Same => return Ok(Translation::plain(text, false)),
             Plan::Direct(model) => (vec![model], false),
             Plan::Pivot(a, b) => (vec![a, b], true),
         };
@@ -245,13 +338,34 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         let sources = doc.sentences();
         let total = sources.len();
         if total == 0 {
-            return Ok(Translation { text: text.to_string(), pivoted });
+            return Ok(Translation::plain(text, pivoted));
         }
         let batch = options.batch_size.max(1);
         let draft_shown = options.fast_beam.is_some_and(|b| b != options.beam);
         let mut output: Vec<Option<String>> = vec![None; total];
         // Sentences already translated at the final beam (nothing left to refine).
         let mut refined = vec![false; total];
+        // What the last stage read, per sentence (for word alternatives).
+        let mut last_inputs: Vec<String> = sources.clone();
+        let mut pinned = vec![false; total];
+
+        // Glossary terms are swapped for placeholders before translation and put back afterwards.
+        let glossary = self.glossary.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let entries = glossary.for_pair(from, to);
+        let protected: Vec<Protected> = sources.iter().map(|s| protect(s, &entries)).collect();
+        // Writing the target term into the English sentence works best, but only for a direct model:
+        // after a pivot the intermediate English would carry (say) Urdu script into the second model.
+        let inline_ok = stages.len() == 1;
+
+        // Sentences the user picked from the alternatives are not translated again.
+        for i in 0..total {
+            if let Some((input, translation)) = self.pinned(from, to, &sources[i]) {
+                output[i] = Some(translation);
+                last_inputs[i] = input;
+                refined[i] = true;
+                pinned[i] = true;
+            }
+        }
 
         let snapshot = |output: &[Option<String>]| -> String {
             let ready: Vec<String> = output.iter().map_while(|o| o.clone()).collect();
@@ -266,19 +380,24 @@ impl<R: Resolver, N: Runner> Router<R, N> {
                 let end = (start + batch).min(total);
                 let mut todo = Vec::new();
                 for i in start..end {
-                    match self.peek(&stages, &sources[i], options.beam) {
-                        Some(best) => {
+                    if refined[i] {
+                        continue;
+                    }
+                    match self.peek_protected(&stages, &protected[i], options.beam, inline_ok) {
+                        Some((last_input, best)) => {
                             output[i] = Some(best);
+                            last_inputs[i] = last_input;
                             refined[i] = true;
                         }
                         None => todo.push(i),
                     }
                 }
                 if !todo.is_empty() {
-                    let inputs: Vec<String> = todo.iter().map(|&i| sources[i].clone()).collect();
-                    let draft = self.run_stages(&stages, &inputs, fast)?;
-                    for (i, text) in todo.into_iter().zip(draft) {
+                    let items: Vec<&Protected> = todo.iter().map(|&i| &protected[i]).collect();
+                    let draft = self.run_protected(&stages, &items, fast, inline_ok)?;
+                    for (i, (last_input, text)) in todo.into_iter().zip(draft) {
                         output[i] = Some(text);
+                        last_inputs[i] = last_input;
                     }
                 }
                 on_update(Update { text: snapshot(&output), pass: Pass::Fast, done: end, total, pivoted, draft_shown: false });
@@ -293,10 +412,11 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
         for group in pending.chunks(batch) {
             check()?;
-            let inputs: Vec<String> = group.iter().map(|&i| sources[i].clone()).collect();
-            let better = self.run_stages(&stages, &inputs, options.beam)?;
-            for (&i, text) in group.iter().zip(better) {
+            let items: Vec<&Protected> = group.iter().map(|&i| &protected[i]).collect();
+            let better = self.run_protected(&stages, &items, options.beam, inline_ok)?;
+            for (&i, (last_input, text)) in group.iter().zip(better) {
                 output[i] = Some(text);
+                last_inputs[i] = last_input;
             }
             done += group.len();
             // With a single pass the output is still being filled in order: show a prefix.
@@ -304,26 +424,80 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
 
         let final_text = snapshot(&output);
-        Ok(Translation { text: final_text, pivoted })
+        let segments = build_segments(&final_text, &sources, &last_inputs, &output, &pinned);
+        // Counted once per sentence in the final pass; the draft pass would count them twice.
+        let glossary_hits = (0..total).map(|i| restore_count(&protected[i], output[i].as_deref().unwrap_or(""))).sum();
+        Ok(Translation { text: final_text, pivoted, segments, glossary_hits })
     }
 
-    /// The finished translation of one sentence at `beam`, if every stage is already cached.
-    fn peek(&self, stages: &[ModelSpec], sentence: &str, beam: usize) -> Option<String> {
+    /// The finished translation of one sentence at `beam`, if every stage is already cached, with
+    /// what the last stage read.
+    fn peek(&self, stages: &[ModelSpec], sentence: &str, beam: usize) -> Option<(String, String)> {
         let cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         let mut current = sentence.to_string();
+        let mut last_input = current.clone();
         for model in stages {
+            last_input = current.clone();
             current = cache.get(model, beam, &current)?;
         }
-        Some(current)
+        Some((last_input, current))
     }
 
-    /// Run sentences through every stage, translating only what is not cached.
-    fn run_stages(&self, stages: &[ModelSpec], sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
+    /// Like [`Self::peek`] for a sentence with glossary terms: the finished text, if it is cached.
+    fn peek_protected(&self, stages: &[ModelSpec], p: &Protected, beam: usize, inline_ok: bool) -> Option<(String, String)> {
+        if p.terms.is_empty() {
+            return self.peek(stages, &p.text, beam);
+        }
+        if inline_ok {
+            // The inline attempt decides: accepted, or the placeholder form is the answer.
+            let (last_input, text) = self.peek(stages, &p.inline, beam)?;
+            if p.all_terms_in(&text) {
+                return Some((last_input, text));
+            }
+        }
+        self.peek(stages, &p.text, beam).map(|(last_input, text)| (last_input, restore(&text, p).text))
+    }
+
+    /// Translate sentences that may contain glossary terms. A sentence without terms goes through
+    /// as it is. With terms, the target term is first written into the source sentence; if the
+    /// translation keeps it, that is the result. Otherwise the term is swapped for a placeholder,
+    /// translated, and the placeholder replaced by the target term afterwards.
+    fn run_protected(&self, stages: &[ModelSpec], items: &[&Protected], beam: usize, inline_ok: bool) -> Result<Vec<(String, String)>, TranslateError> {
+        let first: Vec<String> = items.iter().map(|p| if inline_ok && !p.terms.is_empty() { p.inline.clone() } else { p.text.clone() }).collect();
+        let mut out = self.run_stages(stages, &first, beam)?;
+        let mut retry = Vec::new();
+        for (i, p) in items.iter().enumerate() {
+            if p.terms.is_empty() {
+                continue;
+            }
+            if inline_ok {
+                if !p.all_terms_in(&out[i].1) {
+                    retry.push(i);
+                }
+            } else {
+                out[i].1 = restore(&out[i].1, p).text;
+            }
+        }
+        if !retry.is_empty() {
+            let inputs: Vec<String> = retry.iter().map(|&i| items[i].text.clone()).collect();
+            let second = self.run_stages(stages, &inputs, beam)?;
+            for (&i, (last_input, text)) in retry.iter().zip(second) {
+                out[i] = (last_input, restore(&text, items[i]).text);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Run sentences through every stage, translating only what is not cached. Returns, per
+    /// sentence, what the last stage read and what it wrote.
+    fn run_stages(&self, stages: &[ModelSpec], sentences: &[String], beam: usize) -> Result<Vec<(String, String)>, TranslateError> {
         let mut current = sentences.to_vec();
+        let mut last_inputs = current.clone();
         for model in stages {
+            last_inputs = current.clone();
             current = self.run_cached(model, &current, beam)?;
         }
-        Ok(current)
+        Ok(last_inputs.into_iter().zip(current).collect())
     }
 
     fn run_cached(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
@@ -348,6 +522,36 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
         Ok(out)
     }
+}
+
+/// Where each translated sentence sits in the final text. Sentences are found in order, so equal
+/// sentences cannot be confused; if one cannot be found (it should always be there) there are no
+/// segments and the app simply offers no alternatives.
+fn build_segments(text: &str, sources: &[String], inputs: &[String], outputs: &[Option<String>], pinned: &[bool]) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    for i in 0..sources.len() {
+        let Some(target) = outputs[i].as_deref() else { return Vec::new() };
+        let Some(at) = text[cursor..].find(target) else { return Vec::new() };
+        let (start_byte, end_byte) = (cursor + at, cursor + at + target.len());
+        let utf16 = |upto: usize| text[..upto].encode_utf16().count();
+        segments.push(Segment {
+            source: sources[i].clone(),
+            input: inputs[i].clone(),
+            target: target.to_string(),
+            start: utf16(start_byte),
+            end: utf16(end_byte),
+            pinned: pinned[i],
+        });
+        cursor = end_byte;
+    }
+    segments
+}
+
+/// Glossary terms of a sentence that are in its (restored) translation: restoring replaced each
+/// placeholder by its target term, so count the target terms that are present.
+fn restore_count(protected: &Protected, restored_text: &str) -> usize {
+    protected.terms.iter().filter(|(_, target)| !target.is_empty() && restored_text.contains(target.as_str())).count()
 }
 
 #[cfg(test)]
@@ -398,7 +602,7 @@ mod tests {
     #[test]
     fn same_language_returns_the_input() {
         let out = router(&[]).translate("Hello.", "de", "de", &no_cancel()).unwrap();
-        assert_eq!(out, Translation { text: "Hello.".into(), pivoted: false });
+        assert_eq!(out, Translation::plain("Hello.", false));
     }
 
     #[test]

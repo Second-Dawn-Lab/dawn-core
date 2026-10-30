@@ -64,9 +64,34 @@ pub fn resize(src: &OcrImage, width: u32, height: u32) -> OcrImage {
     OcrImage { width, height, rgba }
 }
 
+/// Selections this short hold small text (a line or two of 9 to 12 pixel letters). Measured on generated
+/// text images: Windows OCR reads nothing at 1x, and 2x reads 9 and 10 pixel text with about 40 % fewer
+/// errors than 3x, which is too much for the thin strokes of tiny text; larger factors (4x to 6x) and light
+/// or strong sharpening were not better. So small text is read at 2x and 3x and the cleaner reading wins.
+const SMALL_TEXT_HEIGHT: u32 = 120;
+
+/// The enlargement factors to try, first the usual one.
+pub fn scales(width: u32, height: u32) -> Vec<u32> {
+    if height >= SMALL_TEXT_HEIGHT || width > SMALL_WIDTH {
+        return vec![upscale_factor(width, height)];
+    }
+    [2u32, 3].into_iter().filter(|f| width * f <= MAX_SIDE && height * f <= MAX_SIDE).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_text_is_read_at_two_scales_and_big_images_at_one() {
+        assert_eq!(scales(400, 60), vec![2, 3]);
+        assert_eq!(scales(800, 119), vec![2, 3]);
+        assert_eq!(scales(800, 120), vec![3]);
+        assert_eq!(scales(800, 300), vec![2]);
+        assert_eq!(scales(1920, 80), vec![1]);
+        assert_eq!(scales(3300, 100), vec![1]);
+        assert_eq!(scales(1500, 90), vec![2, 3]);
+    }
 
     #[test]
     fn small_selections_are_enlarged_more() {

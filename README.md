@@ -12,7 +12,7 @@ Shared code for every [Second Dawn](https://github.com/Second-Dawn-Lab) app: fre
 
 | Folder | Contents |
 |---|---|
-| `crates/` | Cargo workspace: `dawn-core` (paths, JSON), `dawn-models` (catalog, downloads, model store), `dawn-translate` (CTranslate2 engines, routing, language detection), `dawn-ocr`, `dawn-capture`, `dawn-hotkeys` |
+| `crates/` | Cargo workspace: `dawn-core` (paths, JSON), `dawn-models` (catalog, downloads, model store), `dawn-translate` (CTranslate2 engines, routing, language detection, glossary, word alternatives), `dawn-docs` (document translation), `dawn-ocr`, `dawn-capture`, `dawn-hotkeys` |
 | `packages/` | pnpm workspace: `@seconddawn/ui` (design system), `@seconddawn/i18n`, `@seconddawn/settings`, `@seconddawn/updater` |
 | `models/catalog.json` | Catalog of downloadable language packs (weights are never committed) |
 | `tools/convert-models/` | Python tooling that converts Opus-MT models into language packs |

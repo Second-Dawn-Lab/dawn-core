@@ -1,0 +1,19 @@
+[package]
+name = "dawn-docs"
+description = "Second Dawn document translation: Word, PowerPoint, Excel, text, Markdown and PDF files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# Office files are zips; deflate only (same features as dawn-models).
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Reads the XML parts of Office files and tells exactly where each piece of text sits, so only the text
+# changes and every other byte of the file stays as it was.
+quick-xml = "0.38"
+# Reads the text layer of a PDF.
+lopdf = { version = "0.46", default-features = false }
+
+[dev-dependencies]
+dawn-models = { path = "../dawn-models" }
+dawn-translate = { path = "../dawn-translate" }

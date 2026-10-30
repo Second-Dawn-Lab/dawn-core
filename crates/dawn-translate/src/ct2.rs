@@ -11,7 +11,9 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use dawn_models::{Catalog, ModelStore};
 use ct2rs::{Config, TranslationOptions, Translator};
+use sentencepiece::SentencePieceProcessor;
 
+use crate::alternatives::{dedupe, first_word_pieces, Alternative};
 use crate::lang_token::LangTokenizer;
 use crate::router::{ModelSpec, Resolver, Router, Runner, TranslateError, TranslateOptions, Translation, Update};
 use crate::TranslationEngine;
@@ -72,8 +74,20 @@ impl Cache {
     }
 }
 
+/// A second copy of a model for word alternatives. The high-level `Translator` only returns the best
+/// hypothesis as text; alternatives need the raw hypotheses of `ct2rs::sys::Translator`, so the
+/// model is loaded again, only when the user asks for alternatives, and unloaded with the others.
+struct AltModel {
+    dir: PathBuf,
+    translator: ct2rs::sys::Translator,
+    source: LangTokenizer,
+    target: SentencePieceProcessor,
+    last_used: Instant,
+}
+
 pub struct Ct2Runner {
     cache: Arc<Mutex<Cache>>,
+    alt: Mutex<Vec<AltModel>>,
     threads: AtomicUsize,
 }
 
@@ -82,7 +96,7 @@ impl Ct2Runner {
         let cache = Arc::new(Mutex::new(Cache { entries: Vec::new(), max_loaded: options.max_loaded.max(1), idle_unload: options.idle_unload }));
         spawn_sweeper(Arc::downgrade(&cache));
         let threads = if options.threads == 0 { default_threads() } else { options.threads };
-        Self { cache, threads: AtomicUsize::new(threads) }
+        Self { cache, alt: Mutex::new(Vec::new()), threads: AtomicUsize::new(threads) }
     }
 
     pub fn loaded_count(&self) -> usize {
@@ -91,6 +105,7 @@ impl Ct2Runner {
 
     pub fn unload_all(&self) {
         self.cache.lock().unwrap_or_else(|e| e.into_inner()).entries.clear();
+        self.alt.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
     /// Threads per model (0 = automatic). Loaded models are dropped so they reload with it.
@@ -134,7 +149,74 @@ impl Ct2Runner {
     }
 }
 
+impl Ct2Runner {
+    /// Run `f` with the alternatives copy of the model in `spec`, loading it if needed (at most two are kept).
+    fn with_alt<T>(&self, spec: &ModelSpec, f: impl FnOnce(&AltModel) -> Result<T, TranslateError>) -> Result<T, TranslateError> {
+        let mut models = self.alt.lock().unwrap_or_else(|e| e.into_inner());
+        models.retain(|m| m.last_used.elapsed() < Duration::from_secs(5 * 60));
+        if !models.iter().any(|m| m.dir == spec.dir) {
+            let name = spec.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let fail = |reason: String| TranslateError::ModelLoad { model: name.clone(), reason };
+            let config = Config { num_threads_per_replica: self.threads(), ..Config::default() };
+            let translator = ct2rs::sys::Translator::new(&spec.dir, &config).map_err(|e| fail(e.to_string()))?;
+            let source = LangTokenizer::open(&spec.dir).map_err(|e| fail(e.to_string()))?;
+            let target = SentencePieceProcessor::open(spec.dir.join("target.spm")).map_err(|e| fail(e.to_string()))?;
+            models.push(AltModel { dir: spec.dir.clone(), translator, source, target, last_used: Instant::now() });
+            while models.len() > 2 {
+                models.remove(0);
+            }
+        }
+        let model = models.iter_mut().find(|m| m.dir == spec.dir).expect("just loaded");
+        model.last_used = Instant::now();
+        f(model)
+    }
+}
+
 impl Runner for Ct2Runner {
+    fn alternatives(&self, spec: &ModelSpec, source: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
+        let engine = |e: &dyn std::fmt::Display| TranslateError::Engine(e.to_string());
+        self.with_alt(spec, |m| {
+            let input = match &spec.prefix {
+                Some(token) => format!("{token} {source}"),
+                None => source.to_string(),
+            };
+            let source_tokens = ct2rs::Tokenizer::encode(&m.source, &input).map_err(|e| engine(&e))?;
+            let prefix = prefix.trim_end();
+            let prefix_tokens: Vec<String> = if prefix.is_empty() {
+                Vec::new()
+            } else {
+                m.target.encode(prefix).map_err(|e| engine(&e))?.into_iter().map(|p| p.piece).collect()
+            };
+            // Ask for a few more than needed: duplicates (same word, different case) are dropped.
+            let wanted = (count + 2).max(4);
+            let options = TranslationOptions::<String, String> {
+                beam_size: wanted,
+                num_hypotheses: wanted,
+                return_alternatives: true,
+                // Words the model gives almost no chance are noise, not alternatives.
+                min_alternative_expansion_prob: 0.003,
+                max_decoding_length: 512,
+                ..Default::default()
+            };
+            let results = m
+                .translator
+                .translate_batch_with_target_prefix(&[source_tokens], &[prefix_tokens.clone()], &options, None)
+                .map_err(|e| engine(&e))?;
+            let Some(result) = results.into_iter().next() else { return Ok(Vec::new()) };
+            let mut found = Vec::new();
+            for hypothesis in result.hypotheses {
+                let rest = hypothesis.get(prefix_tokens.len()..).unwrap_or(&[]);
+                if rest.is_empty() {
+                    continue;
+                }
+                let word = m.target.decode_pieces(first_word_pieces(rest)).map_err(|e| engine(&e))?;
+                let text = m.target.decode_pieces(&hypothesis).map_err(|e| engine(&e))?;
+                found.push(Alternative { word: strip_language_tokens(&word), text: strip_language_tokens(&text) });
+            }
+            Ok(dedupe(found, "", count + 1))
+        })
+    }
+
     fn run(&self, spec: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
         let model = self.get(spec)?;
         let inputs: Vec<String> = match &spec.prefix {
@@ -226,6 +308,21 @@ impl Ct2Engine {
         on_update: &mut dyn FnMut(Update),
     ) -> Result<Translation, TranslateError> {
         self.router.translate_streaming(text, from, to, cancel, options, on_update)
+    }
+
+    /// Alternatives for the word after `prefix` in the translation of `input` (see `Segment::input`).
+    pub fn alternatives(&self, from: &str, to: &str, input: &str, prefix: &str, count: usize) -> Result<Vec<Alternative>, TranslateError> {
+        self.router.alternatives(from, to, input, prefix, count)
+    }
+
+    /// Keep the user's pick for a sentence through later translations of the same source sentence.
+    pub fn pin(&self, from: &str, to: &str, source: &str, input: &str, translation: &str) {
+        self.router.pin(from, to, source, input, translation);
+    }
+
+    /// Use this glossary for every translation from now on.
+    pub fn set_glossary(&self, glossary: crate::Glossary) {
+        self.router.set_glossary(glossary);
     }
 
     /// Threads per model (0 = automatic). Takes effect for the next translation.
