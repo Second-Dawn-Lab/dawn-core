@@ -107,3 +107,25 @@ Fixtures are generated in the tests (zips built in code, a PDF built with `lopdf
 that untouched parts are byte identical, formulas, numbers, dates and sheet names stay, Markdown code is not touched,
 markers round trip, damaged markers fall back, malformed parts are skipped. `tests/with_models.rs` (ignored) translates
 generated `.docx`, `.pptx` and `.xlsx` with the real German model and checks the results.
+
+## Translate and edit (`Session`)
+
+`Session::open(path)` reads a file as the editor needs it: every text segment in reading order, **with its place** and its
+formatting, and (for Office files) the segments that are left as they were.
+
+* **Places** (`Header`): Word has body, header, footer, footnotes, endnotes, comments with the paragraph number in that
+  part; PowerPoint has the slide's position in the *presentation order* (read from `presentation.xml`, not the file name)
+  and notes pages with the slide they belong to; Excel has the sheet name (from `workbook.xml`) and the cell of the
+  shared string (the first cell that shows it); PDF has the page; text files the paragraph. The UI turns this into
+  "Slide 4 · Notes", "Sheet Sales · B5", "Page 2".
+* **Formatting**: a segment with several formats keeps its `{1}..{/1}` markers; `style_from_key` reads bold, italic,
+  underline and links from the run properties of each stretch (`<w:b/>`, `<x:i/>`, `b="1"` all work, a size or
+  complex-script bold does not count). The editor shows bold as bold and hides the markers.
+* `Session::translate` is the same batching as `translate_document` (repeated texts once). `Session::save(translations, out)`
+  uses the existing writers, so everything not translated stays byte for byte as in the original; the written file is
+  opened again with the crate's own loader before it replaces anything (`.part` file, then rename). A damaged marker in an
+  edited text falls back to the proportional mapping above, so no text is lost.
+* `Fingerprint` (size, date, hash of the document's texts) decides whether a draft still fits its file: *same* (also for a
+  copy with another date), *changed* or *missing*.
+* Markdown is refused for editing: its code and link targets are tokens an editor must not show.
+* A 300-page document (12,000 paragraphs) opens in about 1 s and saves in about 1.2 s in a debug build.

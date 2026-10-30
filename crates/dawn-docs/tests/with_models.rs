@@ -151,3 +151,92 @@ fn a_closedxml_style_workbook_is_translated() {
     assert!(out.contains(r#"<x:f>A2&amp;"!"</x:f><x:v>Please check the order before shipping.!</x:v>"#), "a formula result stays");
     assert_ne!(std::fs::read(&input).unwrap(), std::fs::read(&output).unwrap(), "the file must not come back unchanged");
 }
+
+// --- Translate and edit -------------------------------------------------------------------------------------------
+
+/// Open a generated file as the editor does, translate it with the real model, edit two segments, save, open the
+/// result again and check that the edits are in and everything the user did not touch is as translated.
+fn edit_round_trip(input: &Path, output: &Path, first: &str, second: &str) {
+    let session = dawn_docs::Session::open(input).unwrap();
+    let mut translations = session.translate(&mut engine(), &mut |_| {}).unwrap();
+    assert!(session.units.len() >= 2, "{:?}", session.units);
+    let (untouched_before, last) = (translations[1].clone(), session.units.len() - 1);
+    translations[0] = first.to_string();
+    translations[last] = second.to_string();
+    let report = session.save(&translations, output).unwrap();
+    println!("{report:?}");
+    let reopened = dawn_docs::Session::open(output).unwrap();
+    assert_eq!(reopened.units[0], first);
+    assert_eq!(reopened.units[last], second);
+    if last > 1 {
+        // A translation whose markers the model damaged is written proportionally, so compare the words, not the markers.
+        let plain = |t: &str| -> String { t.replace("{/", "{").split('{').map(|piece| piece.trim_start_matches(|c: char| c.is_ascii_digit()).trim_start_matches('}')).collect() };
+        assert_eq!(plain(&reopened.units[1]).split_whitespace().collect::<Vec<_>>(), plain(&untouched_before).split_whitespace().collect::<Vec<_>>(), "a segment the user did not edit keeps its translation");
+    }
+    // The original is untouched.
+    assert_eq!(dawn_docs::Session::open(input).unwrap().units, session.units);
+}
+
+#[test]
+#[ignore = "needs the German pack"]
+fn translate_and_edit_a_docx_keeps_two_edits() {
+    let dir = temp("edit-docx");
+    let (input, output) = (dir.join("a.docx"), dir.join("a (DE).docx"));
+    docx(&input);
+    // The first paragraph has a bold stretch: its edit keeps the markers, and the bold run holds the bold word.
+    edit_round_trip(&input, &output, "{1}Bitte lesen Sie {/1}{2}unbedingt{/2}{3} die Anleitung.{/3}", "Die Eule schl\u{e4}ft tief.");
+    let xml = part(&output, "word/document.xml");
+    assert!(xml.contains("<w:rPr><w:b/></w:rPr><w:t>unbedingt</w:t>"), "{xml}");
+    assert!(xml.contains("12.50"), "numbers are untouched");
+}
+
+fn pptx(path: &Path) {
+    let a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    let slide = |texts: &[&str]| {
+        let paras: String = texts.iter().map(|t| format!("<a:p><a:r><a:t>{t}</a:t></a:r></a:p>")).collect();
+        format!(r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="{a}"><p:cSld><p:spTree><p:sp><p:txBody>{paras}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#)
+    };
+    make_zip(
+        path,
+        &[
+            ("[Content_Types].xml", r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            ("ppt/presentation.xml", r#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>"#),
+            ("ppt/slides/slide1.xml", &slide(&["Welcome to our company", "We build good machines."])),
+            ("ppt/slides/slide2.xml", &slide(&["Thank you for your attention."])),
+        ],
+    );
+}
+
+#[test]
+#[ignore = "needs the German pack"]
+fn translate_and_edit_a_pptx_keeps_two_edits() {
+    let dir = temp("edit-pptx");
+    let (input, output) = (dir.join("a.pptx"), dir.join("a (DE).pptx"));
+    pptx(&input);
+    edit_round_trip(&input, &output, "Herzlich willkommen bei uns", "Danke f\u{fc}r Ihre Aufmerksamkeit!");
+    assert!(part(&output, "ppt/slides/slide2.xml").contains("Danke f\u{fc}r Ihre Aufmerksamkeit!"));
+}
+
+fn xlsx(path: &Path) {
+    let ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    make_zip(
+        path,
+        &[
+            ("[Content_Types].xml", r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#),
+            ("xl/workbook.xml", &format!(r#"<workbook xmlns="{ns}"/>"#)),
+            ("xl/sharedStrings.xml", &format!(r#"<sst xmlns="{ns}"><si><t>Total price</t></si><si><t>Delivery is free of charge.</t></si><si><t>Thank you for your order.</t></si></sst>"#)),
+            ("xl/worksheets/sheet1.xml", &format!(r#"<worksheet xmlns="{ns}"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>12.5</v></c></row></sheetData></worksheet>"#)),
+        ],
+    );
+}
+
+#[test]
+#[ignore = "needs the German pack"]
+fn translate_and_edit_an_xlsx_keeps_two_edits() {
+    let dir = temp("edit-xlsx");
+    let (input, output) = (dir.join("a.xlsx"), dir.join("a (DE).xlsx"));
+    xlsx(&input);
+    edit_round_trip(&input, &output, "Gesamtbetrag", "Vielen Dank f\u{fc}r Ihre Bestellung.");
+    let xml = part(&output, "xl/worksheets/sheet1.xml");
+    assert!(xml.contains("12.5"), "numbers are untouched: {xml}");
+}

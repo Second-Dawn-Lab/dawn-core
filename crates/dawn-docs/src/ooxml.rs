@@ -344,6 +344,18 @@ pub struct Unit {
     /// The text of every span without markers, to cut the translation in proportion if needed.
     span_lengths: Vec<usize>,
     tokens: protect::Tokens,
+    /// The formatting key (index into [`Scan::keys`]) of each span, for showing formatting in an editor.
+    pub span_keys: Vec<usize>,
+}
+
+/// One text segment of a part: a unit when it is translatable, otherwise the text that is left as it was.
+#[derive(Debug, Clone)]
+pub struct Planned {
+    pub unit: Option<Unit>,
+    /// The segment's text as it stands in the document, trimmed.
+    pub text: String,
+    /// The first text node of the segment, to find where in the part it sits.
+    pub first_node: usize,
 }
 
 const MARKER_OPEN: fn(usize) -> String = |k| format!("{{{k}}}");
@@ -351,6 +363,12 @@ const MARKER_CLOSE: fn(usize) -> String = |k| format!("{{/{k}}}");
 
 /// The units of a scanned part (segments with something to translate).
 pub fn plan(scan: &Scan) -> Vec<Unit> {
+    plan_all(scan).into_iter().filter_map(|p| p.unit).collect()
+}
+
+/// Every segment of a scanned part in reading order: the translatable ones as units, the others (numbers,
+/// addresses, identifiers) as text that stays as it is.
+pub fn plan_all(scan: &Scan) -> Vec<Planned> {
     let mut units = Vec::new();
     let mut counter = 0usize;
     for segment in &scan.segments {
@@ -365,6 +383,7 @@ pub fn plan(scan: &Scan) -> Vec<Unit> {
         }
         let whole: String = segment.nodes.iter().map(|&n| scan.nodes[n].text.as_str()).collect();
         if !protect::is_translatable(&whole) {
+            units.push(Planned { unit: None, text: whole.trim().to_string(), first_node: segment.nodes[0] });
             continue;
         }
         let lead: String = whole.chars().take_while(|c| c.is_whitespace()).collect();
@@ -390,7 +409,8 @@ pub fn plan(scan: &Scan) -> Vec<Unit> {
             text = protected;
         }
         let span_lengths = span_texts.iter().map(|s| s.trim().chars().count().max(1)).collect();
-        units.push(Unit {
+        let span_keys: Vec<usize> = if use_markers { spans.iter().map(|(key, _)| *key).collect() } else { vec![spans[0].0] };
+        units.push(Planned { first_node: segment.nodes[0], text: whole.trim().to_string(), unit: Some(Unit {
             text,
             original: whole.trim().to_string(),
             spans: if use_markers { spans.into_iter().map(|(_, n)| n).collect() } else { vec![segment.nodes.clone()] },
@@ -398,7 +418,8 @@ pub fn plan(scan: &Scan) -> Vec<Unit> {
             trail,
             span_lengths: if use_markers { span_lengths } else { vec![1] },
             tokens,
-        });
+            span_keys,
+        }) });
     }
     units
 }
@@ -471,6 +492,21 @@ impl Unit {
     /// The text as it stood in the document.
     pub fn original(&self) -> &str {
         &self.original
+    }
+
+    /// The text sent to the translator with addresses written out again (markers stay): what an editor shows.
+    pub fn display(&self) -> String {
+        protect::restore(&self.text, &self.tokens)
+    }
+
+    /// A translation of [`Unit::text`] with its address tokens replaced by the addresses.
+    pub fn restore_display(&self, translated: &str) -> String {
+        protect::restore(translated, &self.tokens)
+    }
+
+    /// Does the text sent to the translator carry markers or address tokens (so it differs from what is shown)?
+    pub fn is_plain(&self) -> bool {
+        self.spans.len() <= 1 && self.tokens.is_empty()
     }
 
     /// The new text of the nodes of this unit, given the translation of [`Unit::text`].

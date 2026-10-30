@@ -105,7 +105,7 @@ pub(crate) fn load_text(path: &Path) -> Result<Loaded, DocError> {
             blocks.push(Block { first, count: i - first });
         }
     }
-    Ok(Loaded { units, parts: None, skipped: Vec::new(), writer: Box::new(TextWriter { lines, blocks, encoding }) })
+    Ok(Loaded { units, layout: None, restorers: Vec::new(), parts: None, skipped: Vec::new(), writer: Box::new(TextWriter { lines, blocks, encoding }) })
 }
 
 impl Writer for TextWriter {

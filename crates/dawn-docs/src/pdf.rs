@@ -10,7 +10,8 @@ use lopdf::Document;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::{DocError, Loaded, Writer};
+use crate::layout::Header;
+use crate::{SegmentInfo, DocError, Loaded, Writer};
 
 struct PdfWriter {
     /// Per page: the number of paragraphs on it (a page break follows each page but the last).
@@ -59,7 +60,15 @@ pub(crate) fn load(path: &Path) -> Result<Loaded, DocError> {
         return Err(DocError::Scanned);
     }
     skipped.push("the layout of the PDF is not kept: the translation is a Word document with the text of each page".into());
-    Ok(Loaded { units, parts: Some((page_numbers.len(), "pages")), skipped, writer: Box::new(PdfWriter { pages }) })
+    let mut segments = Vec::new();
+    let mut unit = 0;
+    for (page, count) in pages.iter().enumerate() {
+        for _ in 0..*count {
+            segments.push(SegmentInfo { header: Header { part: "page", number: Some(page + 1), ..Default::default() }, unit: Some(unit), source: units[unit].clone(), styles: Vec::new(), plain: true });
+            unit += 1;
+        }
+    }
+    Ok(Loaded { units, layout: Some(segments), restorers: Vec::new(), parts: Some((page_numbers.len(), "pages")), skipped, writer: Box::new(PdfWriter { pages }) })
 }
 
 /// Re-form paragraphs from the lines of a page: lines are joined with a space (a hyphen at the end

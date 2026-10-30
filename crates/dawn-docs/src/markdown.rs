@@ -31,7 +31,7 @@ pub(crate) fn load(path: &Path) -> Result<Loaded, DocError> {
     let lines = split_lines(&text);
     let mut units: Vec<String> = Vec::new();
     let pieces = parse(&lines.lines, &mut units);
-    Ok(Loaded { units, parts: None, skipped: Vec::new(), writer: Box::new(MarkdownWriter { lines, pieces, encoding }) })
+    Ok(Loaded { units, layout: None, restorers: Vec::new(), parts: None, skipped: Vec::new(), writer: Box::new(MarkdownWriter { lines, pieces, encoding }) })
 }
 
 fn is_fence(trimmed: &str) -> Option<(char, usize)> {

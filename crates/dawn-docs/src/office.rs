@@ -10,8 +10,9 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::layout::{self, Header};
 use crate::ooxml::{self, Dialect, Scan, Unit};
-use crate::{DocError, Kind, Loaded, Writer};
+use crate::{DocError, Kind, Loaded, SegmentInfo, Writer};
 
 /// The first bytes of a legacy Office / encrypted OOXML container (an OLE compound file).
 const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -89,6 +90,16 @@ pub(crate) fn load(path: &Path, kind: Kind) -> Result<Loaded, DocError> {
     let mut skipped = Vec::new();
     let mut parts = Vec::new();
     let mut units_text: Vec<String> = Vec::new();
+    // Where things are, for an editor: slide order, sheet names and the cell of every shared string.
+    let slide_pos = if kind == Kind::Pptx { layout::slide_positions(&mut zip) } else { HashMap::new() };
+    let sheet_names: HashMap<String, String> = if kind == Kind::Xlsx {
+        layout::ordered_targets(&mut zip, "xl/workbook.xml", "sheet").into_iter().filter_map(|(n, p)| n.map(|n| (p, n))).collect()
+    } else {
+        HashMap::new()
+    };
+    let shared_cells = if kind == Kind::Xlsx { layout::shared_string_cells(&mut zip) } else { HashMap::new() };
+    let mut segments: Vec<SegmentInfo> = Vec::new();
+    let mut restorers: Vec<Option<Unit>> = Vec::new();
     let mut ordered: Vec<&String> = names.iter().collect();
     ordered.sort_by_key(|n| natural_key(n));
     for name in ordered {
@@ -106,9 +117,71 @@ pub(crate) fn load(path: &Path, kind: Kind) -> Result<Loaded, DocError> {
                 continue;
             }
         };
-        let units = ooxml::plan(&scan);
+        let planned = ooxml::plan_all(&scan);
+        let units: Vec<Unit> = planned.iter().filter_map(|p| p.unit.clone()).collect();
         let first = units_text.len();
         units_text.extend(units.iter().map(|u| u.text.clone()));
+        let notes_of = if kind == Kind::Pptx && name.starts_with("ppt/notesSlides/") { layout::notes_slide(&mut zip, name) } else { None };
+        let si_starts = if name == "xl/sharedStrings.xml" { layout::starts_of(&xml, "si", None) } else { Vec::new() };
+        let cell_starts = if kind == Kind::Xlsx && name.starts_with("xl/worksheets/") { layout::starts_of(&xml, "c", Some("r")) } else { Vec::new() };
+        let mut next_unit = first;
+        for (k, p) in planned.iter().enumerate() {
+            let offset = scan.nodes[p.first_node].tag.start;
+            let number = Some(k + 1);
+            let header = match kind {
+                Kind::Docx => {
+                    let part = if name == "word/document.xml" {
+                        "body"
+                    } else if name.contains("header") {
+                        "header"
+                    } else if name.contains("footer") {
+                        "footer"
+                    } else if name.contains("footnotes") {
+                        "footnotes"
+                    } else if name.contains("endnotes") {
+                        "endnotes"
+                    } else {
+                        "comments"
+                    };
+                    Header { part, number, ..Default::default() }
+                }
+                Kind::Pptx => {
+                    let digits = || name.chars().filter(char::is_ascii_digit).collect::<String>().parse().ok();
+                    if name.starts_with("ppt/notesSlides/") {
+                        let slide = notes_of.as_ref().and_then(|s| slide_pos.get(s).copied()).or_else(digits);
+                        Header { part: "notes", number: slide, ..Default::default() }
+                    } else {
+                        Header { part: "slide", number: slide_pos.get(name.as_str()).copied().or_else(digits), ..Default::default() }
+                    }
+                }
+                _ => {
+                    if name == "xl/sharedStrings.xml" {
+                        let index = si_starts.partition_point(|(start, _)| *start <= offset).saturating_sub(1);
+                        match shared_cells.get(&index) {
+                            Some((sheet, cell)) => Header { part: "sheet", name: Some(sheet.clone()), cell: Some(cell.clone()), number: None },
+                            None => Header { part: "sheet", number, ..Default::default() },
+                        }
+                    } else if name.starts_with("xl/worksheets/") {
+                        let index = cell_starts.partition_point(|(start, _)| *start <= offset);
+                        let cell = index.checked_sub(1).and_then(|i| cell_starts[i].1.clone());
+                        Header { part: "sheet", name: sheet_names.get(name.as_str()).cloned(), cell, number }
+                    } else if name.starts_with("xl/drawings/") {
+                        Header { part: "drawing", number, ..Default::default() }
+                    } else {
+                        Header { part: "comment", number, ..Default::default() }
+                    }
+                }
+            };
+            match &p.unit {
+                Some(unit) => {
+                    let styles = if unit.spans() > 1 { unit.span_keys.iter().map(|&key| layout::style_from_key(&scan.keys[key])).collect() } else { Vec::new() };
+                    segments.push(SegmentInfo { header, unit: Some(next_unit), source: unit.display(), styles, plain: unit.is_plain() });
+                    restorers.push(Some(unit.clone()));
+                    next_unit += 1;
+                }
+                None => segments.push(SegmentInfo { header, unit: None, source: p.text.clone(), styles: Vec::new(), plain: true }),
+            }
+        }
         parts.push(PartPlan { name: name.clone(), xml, scan, units, first });
     }
 
@@ -145,7 +218,7 @@ pub(crate) fn load(path: &Path, kind: Kind) -> Result<Loaded, DocError> {
         Kind::Xlsx => Some((count("xl/worksheets/", "sheet"), "sheets")),
         _ => None,
     };
-    Ok(Loaded { units: units_text, parts: parts_info, skipped, writer: Box::new(OfficeWriter { input: path.to_path_buf(), kind, parts, keep_original, note_formulas }) })
+    Ok(Loaded { units: units_text, layout: Some(segments), restorers, parts: parts_info, skipped, writer: Box::new(OfficeWriter { input: path.to_path_buf(), kind, parts, keep_original, note_formulas }) })
 }
 
 /// `slide2.xml` before `slide10.xml`.

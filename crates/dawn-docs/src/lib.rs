@@ -14,18 +14,22 @@
 //! * parts that cannot be handled (charts, SmartArt, pivot tables) stay in the file untranslated and
 //!   are listed too.
 
+mod layout;
 mod markdown;
 mod office;
 mod ooxml;
 mod pdf;
 mod protect;
+mod session;
 mod text;
 
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-pub use ooxml::{plan, rewrite, scan, split_markers, split_proportionally, Unit};
+pub use layout::{style_from_key, Header, SpanStyle};
+pub use session::{Fingerprint, FingerprintStatus, SegmentInfo, Session};
+pub use ooxml::{plan, plan_all, rewrite, scan, split_markers, split_proportionally, Planned, Unit};
 pub use protect::is_translatable;
 
 /// Larger files are refused: they are read into memory.
@@ -154,12 +158,16 @@ pub struct Report {
 pub(crate) struct Loaded {
     /// The text of every unit, in document order.
     pub units: Vec<String>,
+    /// Every text segment with its place, for an editor (`None`: one unit per paragraph, no places known).
+    pub layout: Option<Vec<SegmentInfo>>,
+    /// Per unit: how to show its translation (address tokens written out). Empty when units carry no tokens.
+    pub restorers: Vec<Option<Unit>>,
     pub parts: Option<(usize, &'static str)>,
     pub skipped: Vec<String>,
     pub writer: Box<dyn Writer>,
 }
 
-pub(crate) trait Writer {
+pub(crate) trait Writer: Send + Sync {
     /// Write the output file; `translations[i]` is the translation of unit `i`. Returns more notes.
     fn write(&self, translations: &[String], out: &Path) -> Result<Vec<String>, DocError>;
 }
@@ -200,20 +208,13 @@ pub fn sample_text(path: &Path, max_chars: usize) -> Result<String, DocError> {
 const BATCH_UNITS: usize = 16;
 const BATCH_CHARS: usize = 4000;
 
-/// Translate `input` into `output`.
-///
-/// Repeated texts are translated once. `progress` is called after every batch. The output is
-/// written next to its final name and renamed when complete, so a cancelled or failed job leaves no
-/// partial file.
-pub fn translate_document(input: &Path, output: &Path, translator: &mut dyn Translator, progress: &mut dyn FnMut(Progress)) -> Result<Report, DocError> {
-    let kind = check_input(input)?;
-    let loaded = load(input, kind)?;
-
+/// Translate `units` (repeated texts once, in batches), returning one translation per unit and the number of
+/// distinct texts that went to the translator.
+pub(crate) fn translate_texts(units: &[String], translator: &mut dyn Translator, progress: &mut dyn FnMut(Progress)) -> Result<(Vec<String>, usize), DocError> {
     // Distinct texts, in order of first appearance.
     let mut index_of: HashMap<&str, usize> = HashMap::new();
     let mut distinct: Vec<&str> = Vec::new();
-    let unit_to_distinct: Vec<usize> = loaded
-        .units
+    let unit_to_distinct: Vec<usize> = units
         .iter()
         .map(|u| {
             *index_of.entry(u.as_str()).or_insert_with(|| {
@@ -251,6 +252,19 @@ pub fn translate_document(input: &Path, output: &Path, translator: &mut dyn Tran
     }
 
     let per_unit: Vec<String> = unit_to_distinct.iter().map(|&i| translated[i].clone()).collect();
+    Ok((per_unit, total))
+}
+
+/// Translate `input` into `output`.
+///
+/// Repeated texts are translated once. `progress` is called after every batch. The output is
+/// written next to its final name and renamed when complete, so a cancelled or failed job leaves no
+/// partial file.
+pub fn translate_document(input: &Path, output: &Path, translator: &mut dyn Translator, progress: &mut dyn FnMut(Progress)) -> Result<Report, DocError> {
+    let kind = check_input(input)?;
+    let loaded = load(input, kind)?;
+
+    let (per_unit, total) = translate_texts(&loaded.units, translator, progress)?;
     let temp = temp_path(output);
     let result = loaded.writer.write(&per_unit, &temp);
     let notes = match result {
