@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.4.0...v0.5.0) (2026-10-31)
+
+
+### Features
+
+* list windows next to their control, shortcut warnings and double-press check ([5aed895](https://github.com/Second-Dawn-Lab/dawn-core/commit/5aed895ea3616072634ed09fa5f1e58e2854b6e0))
+* live captions core, cheap region capture, dictionary packs for 13 languages ([c61bb1d](https://github.com/Second-Dawn-Lab/dawn-core/commit/c61bb1dcae2321a37bb87eda2d5dd440ac1bfbcf))
+
 ## [0.4.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.3.0...v0.4.0) (2026-10-31)
 
 
