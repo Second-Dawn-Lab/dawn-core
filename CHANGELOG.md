@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.3.0...v0.4.0) (2026-10-31)
+
+
+### Features
+
+* offline dictionary packs with lemma lookup (dawn-dict) ([53bd673](https://github.com/Second-Dawn-Lab/dawn-core/commit/53bd6737f6b7a4e32db7709ba04af05de4e96817))
+
 ## [0.3.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.2.0...v0.3.0) (2026-10-30)
 
 
