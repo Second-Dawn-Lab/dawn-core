@@ -11,8 +11,10 @@
 use anyhow::{anyhow, Result};
 
 pub mod map;
+pub mod region;
 
 pub use map::{Frame, PixelRect};
+pub use region::{Grabber, Region};
 
 /// One monitor and its screenshot.
 pub struct Screen {

@@ -5,6 +5,11 @@
 //! dawn-dict-build from-english <lang> <words-of-lang.jsonl> <english.jsonl|->        <out.dict>   e.g. English to German
 //! ```
 //!
+//! dawn-dict-build pair        <lang> <Language name> <out folder>                          both directions, streamed with curl
+//!
+//! `pair` downloads the two kaikki.org extracts itself (through `curl`, nothing is stored) and writes `<lang>-en.dict` and
+//! `en-<lang>.dict` into the folder; it prints one JSON line with the counts.
+//!
 //! `words-of-lang.jsonl` is the kaikki.org extract of the language's words (`kaikki.org-dictionary-German.jsonl`);
 //! `english.jsonl` the extract of the English words (translations and inflected forms). `-` reads standard input, so a
 //! multi-gigabyte extract can be streamed without storing it. See `docs/dictionary.md`.
@@ -43,11 +48,73 @@ fn for_each_line(path: &str, mut f: impl FnMut(&str)) {
     }
 }
 
+/// Stream a URL through `curl` without storing it.
+fn curl_lines(url: &str, mut f: impl FnMut(&str)) {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("curl").args(["-sL", "--fail", url]).stdout(Stdio::piped()).spawn().unwrap_or_else(|e| panic!("cannot start curl: {e}"));
+    let mut reader = BufReader::with_capacity(1 << 20, child.stdout.take().expect("curl output"));
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("read error: {e}");
+                break;
+            }
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let text = text.trim_end();
+        if !text.is_empty() {
+            f(text);
+        }
+    }
+    let status = child.wait().expect("curl");
+    if !status.success() {
+        panic!("downloading {url} failed ({status})");
+    }
+}
+
+fn pair(lang: &str, name: &str, out: &str) {
+    let base = |n: &str| format!("https://kaikki.org/dictionary/{n}/kaikki.org-dictionary-{n}.jsonl");
+    let mut to_en = Collector::new();
+    let mut from_en = Collector::new();
+    curl_lines(&base(name), |line| {
+        to_en.feed_glosses(line, lang);
+        from_en.feed_reverse(line, lang);
+        if to_en.lines % 200_000 == 0 {
+            eprintln!("{name}: {} lines", to_en.lines);
+        }
+    });
+    curl_lines(&base("English"), |line| {
+        from_en.feed_translations(line, lang);
+        if from_en.lines % 500_000 == 0 {
+            eprintln!("English: {} lines", from_en.lines);
+        }
+    });
+    let mut stats = Vec::new();
+    for (collector, source, target) in [(to_en, lang, "en"), (from_en, "en", lang)] {
+        let writer = collector.finish(source, target);
+        let (entries, keys) = (writer.entry_count(), writer.key_count());
+        let bytes = writer.finish();
+        let path = format!("{out}/{source}-{target}.dict");
+        std::fs::write(&path, &bytes).expect("cannot write the dictionary file");
+        stats.push(format!("\"{source}-{target}\": {{\"entries\": {entries}, \"keys\": {keys}, \"bytes\": {}}}", bytes.len()));
+    }
+    println!("{{\"lang\": \"{lang}\", {}}}", stats.join(", "));
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.len() == 4 && args[0] == "pair" {
+        pair(&args[1], &args[2], &args[3]);
+        return;
+    }
     let ok = matches!((args.first().map(String::as_str), args.len()), (Some("to-english"), 4) | (Some("from-english"), 5));
     if !ok {
-        eprintln!("usage: dawn-dict-build to-english <lang> <extract|-> <out.dict>\n       dawn-dict-build from-english <lang> <words-of-lang.jsonl> <english.jsonl|-> <out.dict>");
+        eprintln!("usage: dawn-dict-build pair <lang> <Language name> <out folder>
+       dawn-dict-build to-english <lang> <extract|-> <out.dict>\n       dawn-dict-build from-english <lang> <words-of-lang.jsonl> <english.jsonl|-> <out.dict>");
         std::process::exit(2);
     }
     let lang = &args[1];

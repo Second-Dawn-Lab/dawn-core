@@ -1,0 +1,9 @@
+[package]
+name = "dawn-live"
+description = "Second Dawn live captions: detecting changes in a screen region, waiting for stable text, finding the new lines, adapting the update rate and placing the caption bar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Pure logic on pixels, strings and rectangles: no dependencies, so it is tested without a screen or an OCR engine.
+[dependencies]

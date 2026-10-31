@@ -705,6 +705,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-live"
+version = "0.0.0"
+
+[[package]]
 name = "dawn-models"
 version = "0.0.0"
 dependencies = [

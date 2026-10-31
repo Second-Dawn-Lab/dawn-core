@@ -118,6 +118,8 @@ const paths: Record<string, ReactNode> = {
   ),
   pencil: <path d="M17 3a2.8 2.8 0 0 1 4 4L8 20l-5 1 1-5z" />,
   plus: <path d="M12 5v14M5 12h14" />,
+  pause: <path d="M8 5v14M16 5v14" />,
+  play: <path d="M7 4.500v15l12-7.500z" />,
   scan: <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16" />,
 };
 

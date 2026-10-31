@@ -38,6 +38,12 @@ pub struct Dictionary {
     pub attribution: String,
     /// Where to read more or find the original entries.
     pub source_url: String,
+    /// A thin or rough dictionary: the UI shows a "Beta" badge.
+    #[serde(default)]
+    pub beta: bool,
+    /// Entries of the larger direction, for the packs page.
+    #[serde(default)]
+    pub entries: u32,
 }
 
 impl Dictionary {

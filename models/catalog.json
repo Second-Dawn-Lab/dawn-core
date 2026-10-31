@@ -474,19 +474,225 @@
   ],
   "dictionaries": [
     {
+      "id": "ar-en",
+      "languages": [
+        "ar",
+        "en"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/ar-en.zip"
+      ],
+      "sizeBytes": 5638996,
+      "sha256": "c662d1c65bdab01c0b0a56a4fbe48f709e290481f4af7022faee114101826de0",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 37269
+    },
+    {
+      "id": "bn-en",
+      "languages": [
+        "bn",
+        "en"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/bn-en.zip"
+      ],
+      "sizeBytes": 1444130,
+      "sha256": "426ec7acc9df1893a8628cd91eb8fac310ed4db0ac4fe4d47e4d756034526aa9",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 12425
+    },
+    {
       "id": "de-en",
       "languages": [
         "de",
         "en"
       ],
       "urls": [
-        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/1f06838cde2d6111db97b23f19f44782808bcb8f/de-en.zip"
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/de-en.zip"
       ],
-      "sizeBytes": 11502979,
-      "sha256": "9a766e4e34d39e91b46944de96cc0c00056c256ac520c25a19f40878c9439bd1",
+      "sizeBytes": 11502952,
+      "sha256": "97e08b2881e000dacaa52016a3f96964f490352e93c63a63c5ae09cf9beca9bc",
       "license": "CC-BY-SA-4.0",
       "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
-      "sourceUrl": "https://en.wiktionary.org"
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 102897
+    },
+    {
+      "id": "en-es",
+      "languages": [
+        "en",
+        "es"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-es.zip"
+      ],
+      "sizeBytes": 15117820,
+      "sha256": "a9f4f5d4574f61a8e2c65b148e07e376b3d0ff6cf9cba57f884d9c05f68fb90c",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 124377
+    },
+    {
+      "id": "en-fr",
+      "languages": [
+        "en",
+        "fr"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-fr.zip"
+      ],
+      "sizeBytes": 9944491,
+      "sha256": "a1b12a0b30140cc71703ad5643f3f542949b5f8080d6a9534c18b09781e8056d",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 103247
+    },
+    {
+      "id": "en-hi",
+      "languages": [
+        "en",
+        "hi"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-hi.zip"
+      ],
+      "sizeBytes": 3496892,
+      "sha256": "02ad5aa66e53d668df07757fc73e1359d08ac6c50f45b4d4c8814491f4cdbdb0",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 26538
+    },
+    {
+      "id": "en-it",
+      "languages": [
+        "en",
+        "it"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-it.zip"
+      ],
+      "sizeBytes": 15153045,
+      "sha256": "f5a643edcf1d22f6b4be31224a92edac9af276a7c4a99e82e304c44d7ad8c1b6",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 171821
+    },
+    {
+      "id": "en-ja",
+      "languages": [
+        "en",
+        "ja"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-ja.zip"
+      ],
+      "sizeBytes": 14610100,
+      "sha256": "ec90e540d01471f499192893f6353401176259218db2341aae4deffafab24ffa",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 143840
+    },
+    {
+      "id": "en-pa",
+      "languages": [
+        "en",
+        "pa"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-pa.zip"
+      ],
+      "sizeBytes": 1235259,
+      "sha256": "1c14f79da024f87794d478131b019a75921b28a6775e2cde6b20d7be568d7c5e",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 10597
+    },
+    {
+      "id": "en-ru",
+      "languages": [
+        "en",
+        "ru"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-ru.zip"
+      ],
+      "sizeBytes": 10892525,
+      "sha256": "980be26310b6fe2c99c8b8d3f21ce7e171137b25bb6a86647d91c0adc593a9a6",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 62442
+    },
+    {
+      "id": "en-tr",
+      "languages": [
+        "en",
+        "tr"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-tr.zip"
+      ],
+      "sizeBytes": 13389754,
+      "sha256": "8ea22eaec1cb61e72df55d25355a89a98bffeaa8b51e575e29cc926e28061258",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 29210
+    },
+    {
+      "id": "en-ur",
+      "languages": [
+        "en",
+        "ur"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-ur.zip"
+      ],
+      "sizeBytes": 1316594,
+      "sha256": "6ff707c35b6bb976d6ca6d51052b34547e826850b9616b2c953f9c78d7842232",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": false,
+      "entries": 12993
+    },
+    {
+      "id": "en-zh",
+      "languages": [
+        "en",
+        "zh"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/cec4ff05c010a55a68f95bf502de0c7890f86e26/en-zh.zip"
+      ],
+      "sizeBytes": 15330438,
+      "sha256": "97bd5d514de9703dd256360d634aec0398c482056a05ec1ea43d8f95d78ba131",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org",
+      "beta": true,
+      "entries": 194926
     }
   ]
 }

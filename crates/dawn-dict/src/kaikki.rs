@@ -20,6 +20,11 @@ use crate::format::Writer;
 /// Parts of speech that are not words a reader looks up.
 const SKIPPED_POS: &[&str] = &["character", "punct", "symbol"];
 
+/// A part of speech that is no word to look up. In Chinese and Japanese a single character is a word ("character" in Wiktionary).
+fn skipped(lang: &str, pos: &str) -> bool {
+    SKIPPED_POS.contains(&pos) && !(pos == "character" && matches!(lang, "zh" | "ja"))
+}
+
 /// Tags that mark a translation as regional, historical or otherwise not the plain standard word.
 fn is_noise_tag(tag: &str) -> bool {
     let t = tag.to_lowercase();
@@ -228,7 +233,7 @@ impl Collector {
         }
         let head = str_of(&v, "word").trim().to_string();
         let pos = str_of(&v, "pos").to_string();
-        if head.is_empty() || SKIPPED_POS.contains(&pos.as_str()) {
+        if head.is_empty() || skipped(lang_code, &pos) {
             return;
         }
         let senses: Vec<Value> = v.get("senses").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -273,7 +278,7 @@ impl Collector {
         }
         let head = str_of(&v, "word").trim().to_string();
         let pos = str_of(&v, "pos").to_string();
-        if head.is_empty() || SKIPPED_POS.contains(&pos.as_str()) || head.contains(' ') && pos == "phrase" {
+        if head.is_empty() || skipped(lang, &pos) || head.contains(' ') && pos == "phrase" {
             return;
         }
         let note = gender_from_grammar(&head, &grammar_of(&v, &head));
@@ -327,7 +332,7 @@ impl Collector {
         }
         let head = str_of(&v, "word").trim().to_string();
         let pos = str_of(&v, "pos").to_string();
-        if head.is_empty() || SKIPPED_POS.contains(&pos.as_str()) {
+        if head.is_empty() || skipped("en", &pos) {
             return;
         }
         let lower = head.to_lowercase();

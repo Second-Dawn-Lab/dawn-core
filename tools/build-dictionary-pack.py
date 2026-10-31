@@ -3,7 +3,7 @@
     python tools/build-dictionary-pack.py <folder with de-en.dict and en-de.dict> <out folder> [--lang-a de --lang-b en]
 
 The dictionary files come from `dawn-dict-build` (see docs/dictionary.md). Output: `<out>/en-de.zip` and
-`<out>/README.md` (the Hugging Face model card). Prints the size and sha256 for `models/catalog.json`.
+`<out>/<id>.json` (sizes, counts, sha256 for `models/catalog.json` and the model card; see `dictionary-model-card.py`).
 """
 import argparse
 import hashlib
@@ -65,53 +65,18 @@ def main():
             z.write(os.path.join(args.folder, name), name)
     size = os.path.getsize(zip_path)
     digest = sha256(zip_path)
-    card = f"""---
-license: cc-by-sa-4.0
-language:
-- {pair[0]}
-- {pair[1]}
-tags:
-- dictionary
-- wiktionary
-- offline
----
-
-# Owl-L dictionaries
-
-Offline dictionary packs for [Owl-L](https://github.com/Second-Dawn-Lab) (the Second Dawn translator). The app downloads a pack
-once, checks its SHA-256 and then looks words up on the computer without any network.
-
-## `{pack_id}.zip`
-
-| | |
-|---|---|
-| Directions | {info['directions'][0]} ({counts[files[0]][0]:,} entries), {info['directions'][1]} ({counts[files[1]][0]:,} entries) |
-| Size | {size / 1e6:.1f} MB zip (the files inside are about {sum(os.path.getsize(os.path.join(args.folder, n)) for n in files) / 1e6:.0f} MB) |
-| SHA-256 | `{digest}` |
-| Built | {info['built']} |
-
-Each entry has the headword, part of speech, the head line with grammar (gender, plural, verb forms), ranked senses with
-translations or glosses, and short examples where Wiktionary has them. Inflected forms ("Häuser", "ging") are lookup keys
-that lead to their base form ("Haus", "gehen"), taken from Wiktionary's own inflection tables.
-
-## Source, license and credit
-
-{CREDIT}
-
-* **License of this pack: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).** If you reuse or adapt it, you must credit
-  Wiktionary and its contributors, link to the license, say what you changed, and share your version under the same license.
-* Wiktionary: <https://www.wiktionary.org> (entries and their authors are listed in each page's history).
-* kaikki.org / wiktextract: <https://kaikki.org>, Tatu Ylonen, "Wiktextract: Wiktionary as Machine-Readable Structured Data", LREC 2022.
-* The Owl-L application code is MIT licensed; this data pack is a separate work under CC BY-SA 4.0.
-
-## How it is made
-
-`dawn-dict-build` (in [dawn-core](https://github.com/Second-Dawn-Lab/dawn-core), `crates/dawn-dict`) reads the kaikki.org extracts of the
-English edition of Wiktionary and writes the compact index; `tools/build-dictionary-pack.py` zips the files. Nothing else is added.
-"""
-    with open(os.path.join(args.out, 'README.md'), 'w', encoding='utf-8') as f:
-        f.write(card)
-    print(json.dumps({'id': pack_id, 'zip': zip_path, 'sizeBytes': size, 'sha256': digest}, indent=2))
+    summary = {
+        'id': pack_id,
+        'languages': pair,
+        'zip': os.path.basename(zip_path),
+        'sizeBytes': size,
+        'sha256': digest,
+        'built': info['built'],
+        'directions': {n.replace('.dict', ''): {'entries': counts[n][0], 'keys': counts[n][1], 'bytes': os.path.getsize(os.path.join(args.folder, n))} for n in files},
+    }
+    with open(os.path.join(args.out, f'{pack_id}.json'), 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2)
+    print(json.dumps(summary))
 
 
 if __name__ == '__main__':

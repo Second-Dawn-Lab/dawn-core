@@ -970,6 +970,8 @@ mod tests {
             license: "CC-BY-SA-4.0".into(),
             attribution: "Wiktionary contributors".into(),
             source_url: "https://en.wiktionary.org".into(),
+            beta: false,
+            entries: 0,
         }
     }
 

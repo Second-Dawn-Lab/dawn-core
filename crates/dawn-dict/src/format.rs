@@ -56,9 +56,15 @@ impl From<serde_json::Error> for DictError {
     }
 }
 
-/// How keys are compared: lowercase.
+/// Marks that are written above or below a letter and are left out when comparing: Russian stress, Arabic and Urdu vowel
+/// signs, combining accents. (Precomposed letters such as "ä" are letters and stay.)
+fn is_mark(c: char) -> bool {
+    matches!(c, '\u{0300}'..='\u{036F}' | '\u{0610}'..='\u{061A}' | '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{06D6}'..='\u{06ED}' | '\u{0640}')
+}
+
+/// How keys are compared: lowercase, without stress and vowel marks.
 pub fn normalize(word: &str) -> String {
-    word.to_lowercase()
+    word.chars().filter(|c| !is_mark(*c)).collect::<String>().to_lowercase()
 }
 
 /// Builds a dictionary file in memory.
@@ -326,6 +332,18 @@ mod tests {
         assert!(d.postings("Katze").is_empty());
         assert_eq!(d.entry(1).unwrap().head, "Hund");
         assert!(d.entry(2).is_err());
+    }
+
+    #[test]
+    fn stress_and_vowel_marks_do_not_matter_when_looking_up() {
+        assert_eq!(normalize("Да\u{301}ча"), "дача");
+        assert_eq!(normalize("\u{0643}\u{0650}\u{062A}\u{064E}\u{0627}\u{0628}"), "\u{0643}\u{062A}\u{0627}\u{0628}");
+        assert_eq!(normalize("Häuser"), "häuser");
+        let mut w = Writer::new("ru", "en");
+        let id = w.add_entry(&entry("да\u{301}ча", "dacha"));
+        let d = Dict::from_bytes(w.finish()).unwrap();
+        assert_eq!(d.postings("дача"), vec![(id, false)]);
+        assert_eq!(d.postings("ДА\u{301}ЧА"), vec![(id, false)]);
     }
 
     #[test]

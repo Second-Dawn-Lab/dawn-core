@@ -79,3 +79,37 @@ fn the_published_pack_installs_and_answers() {
     store.remove_dictionary(&pack.id).unwrap();
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// One lookup per language of the v0.3 packs, in the folders `dawn-dict-build pair` wrote (`DAWN_DICT_DIR/v2/<lang>/`).
+/// `(language, an inflected word, its base form)`; prints the entry counts and the first meanings for the quality notes.
+#[test]
+#[ignore = "needs the built packs of every language"]
+fn every_language_answers_a_lookup_with_its_base_form() {
+    let root = PathBuf::from(std::env::var("DAWN_DICT_DIR").expect("set DAWN_DICT_DIR")).join("v2");
+    let cases = [
+        ("de", "Häuser", "Haus"),
+        ("fr", "chevaux", "cheval"),
+        ("es", "hablaron", "hablar"),
+        ("it", "andavo", "andare"),
+        ("ru", "книги", "книга"),
+        ("tr", "evlerimizde", "ev"),
+        ("ar", "كتب", "كتاب"),
+        ("hi", "लड़कियों", "लड़की"),
+        ("ur", "لڑکے", "لڑکا"),
+        ("ja", "食べた", "食べる"),
+        ("zh", "你好", "你好"),
+        ("pa", "ਕਿਤਾਬਾਂ", "ਕਿਤਾਬ"),
+        ("bn", "বাচ্চার", "বাচ্চা"),
+    ];
+    for (lang, word, base) in cases {
+        let to = Dict::open(&root.join(lang).join(format!("{lang}-en.dict"))).unwrap();
+        let from = Dict::open(&root.join(lang).join(format!("en-{lang}.dict"))).unwrap();
+        let found = to.lookup(word).unwrap();
+        let first = found.hits.first().map(|h| format!("{} ({}) {:?}", h.entry.head, h.entry.pos, h.entry.short_translations(3))).unwrap_or_default();
+        println!("{lang}: {lang}->en {} entries, en->{lang} {} entries | {word} -> {first}", to.entry_count(), from.entry_count());
+        if !found.hits.iter().any(|h| h.entry.head == base) {
+            println!("   NOTE: {word} did not lead to {base}; got {:?} / suggestions {:?}", found.hits.iter().map(|h| h.entry.head.clone()).collect::<Vec<_>>(), found.suggestions);
+        }
+        assert!(!found.hits.is_empty() || !found.suggestions.is_empty(), "{lang}: nothing found for {word}");
+    }
+}

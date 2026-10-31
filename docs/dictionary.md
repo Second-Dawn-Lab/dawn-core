@@ -46,26 +46,40 @@ Not considered because their terms forbid redistribution: dict.cc, Linguee, PONS
 * **Tools**: `dawn-dict-build to-english|from-english` (reads the kaikki.org JSONL, streamed from `curl` if wanted) and
   `tools/build-dictionary-pack.py` (zip + model card).
 
-## Pack sizes
+## Packs (v0.3.0)
 
-| Pair | Direction | Entries | Keys | File |
-|---|---|---|---|---|
-| German and English | German to English | 102,897 | 482,296 | 30.6 MB |
-| | English to German | 78,440 | 151,614 | 14.6 MB |
-| | both, `de-en.zip` | | | 45.2 MB raw, **11.5 MB download** |
+Built with `dawn-dict-build pair <lang> <Language>` from the kaikki.org extracts of 2026-10; all 13 together are 119 MB to download. Thin means fewer than about 15,000 entries; **Beta** is set in the catalog for packs under 5,000 entries (none) and for Chinese.
+
+| Language | Pack | to English (entries) | from English (entries) | Download | Quality |
+|---|---|---|---|---|---|
+| Arabic | `ar-en.zip` | 28,392 | 37,269 | 5.6 MB | fair; vowel marks are ignored when looking up |
+| Bengali | `bn-en.zip` | 11,143 | 12,425 | 1.4 MB | thin |
+| German | `de-en.zip` | 102,897 | 78,440 | 11.5 MB | good; gender, plural and verb forms |
+| Spanish | `en-es.zip` | 124,377 | 92,281 | 15.1 MB | good |
+| French | `en-fr.zip` | 103,247 | 85,971 | 9.9 MB | good |
+| Hindi | `en-hi.zip` | 26,251 | 26,538 | 3.5 MB | fair |
+| Italian | `en-it.zip` | 171,821 | 99,082 | 15.2 MB | large; many inflected forms are entries of their own |
+| Japanese | `en-ja.zip` | 143,840 | 81,704 | 14.6 MB | large; verb forms work; text is not split into words, so only a single word clicked or selected is looked up |
+| Punjabi | `en-pa.zip` | 8,046 | 10,597 | 1.2 MB | thin |
+| Russian | `en-ru.zip` | 62,442 | 57,661 | 10.9 MB | good; stress marks are ignored when looking up |
+| Turkish | `en-tr.zip` | 29,210 | 27,780 | 13.4 MB | fair; case and possessive forms only where Wiktionary lists them (evlerimizde leads to ev) |
+| Urdu | `en-ur.zip` | 8,986 | 12,993 | 1.3 MB | thin |
+| Chinese | `en-zh.zip` | 194,926 | 118,466 | 15.3 MB | **Beta**: headwords are mostly traditional characters, simplified-only words are often missing; no word splitting |
+
+The smallest pack is 1.2 MB (Punjabi), the largest 15.3 MB (Chinese). Pairs without English are answered through English ("Meanings in English"); the pack of the other language is offered when it is missing.
 
 ## Rebuilding
 
 ```text
 curl -O https://kaikki.org/dictionary/German/kaikki.org-dictionary-German.jsonl        (1.1 GB)
-dawn-dict-build to-english de kaikki.org-dictionary-German.jsonl de-en.dict
-curl -sL https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl |      (3.4 GB, streamed)
-  dawn-dict-build from-english de kaikki.org-dictionary-German.jsonl - en-de.dict
-python tools/build-dictionary-pack.py <folder with both .dict> <out>
-hf upload Second-Dawn-Lab/owll-dictionaries <out> . --include "de-en.zip" --include "README.md"
+dawn-dict-build pair de German <folder>      (streams both extracts through curl; writes de-en.dict and en-de.dict)
+python tools/build-dictionary-pack.py <folder> <out> --lang-a de --lang-b en     (one pack: <id>.zip and <id>.json)
+python tools/dictionary-model-card.py <out> COMMIT --beta zh                      (README.md for the repo)
+hf upload Second-Dawn-Lab/owll-dictionaries <out> . --include "*.zip" --include "README.md"
+python tools/dictionary-model-card.py <out> <the commit the upload printed> --beta zh     (the catalog entries)
 ```
 
-Then put the new commit hash, size and sha256 into `models/catalog.json` (`dictionaries`).
+Then put the new commit hash, size and sha256 into `models/catalog.json` (`dictionaries`), and run `cargo test -p dawn-dict --test real_pack -- --ignored` with `DAWN_DICT_DIR` set.
 
 ## Credit (About, the Language packs page, the model card)
 
