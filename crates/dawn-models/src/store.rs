@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::catalog::{Catalog, Model};
+use crate::catalog::{Catalog, Dictionary, Model};
 use crate::download::download;
 use crate::error::{ModelError, Result};
 
@@ -192,11 +192,42 @@ impl ModelStore {
 
     /// Download, verify, extract and register one model.
     ///
+    /// The folder that holds dictionary packs: its own store inside this one, with its own list of what is installed,
+    /// so translation models and dictionaries never see each other.
+    pub fn dictionary_store(&self) -> ModelStore {
+        ModelStore::new(self.root.join("dictionaries"))
+    }
+
+    /// Where a dictionary pack is extracted.
+    pub fn dictionary_dir(&self, id: &str) -> PathBuf {
+        self.dictionary_store().model_dir(id)
+    }
+
+    /// Installed means: in the list and its `info.json` is there (a half-extracted pack has none).
+    pub fn is_dictionary_installed(&self, id: &str) -> bool {
+        let store = self.dictionary_store();
+        store.model_dir(id).join("info.json").exists() && store.read_installed().models.iter().any(|m| m.id == id)
+    }
+
+    /// Download, verify (sha256) and extract a dictionary pack. Same download rules as [`ModelStore::install_model`].
+    pub fn install_dictionary(&self, dictionary: &Dictionary, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
+        self.dictionary_store().install_archive(&dictionary.as_model(), "info.json", opts, on_step)
+    }
+
+    pub fn remove_dictionary(&self, id: &str) -> Result<()> {
+        self.dictionary_store().remove_model_files(&[id.to_string()])
+    }
+
     /// The urls are tried in order. A url that fails to download, or that delivers a file whose
     /// sha256 differs from the catalog, is skipped in favor of the next one; only when all of them
     /// fail is the last error returned. `on_step` gets the per-model download progress as
     /// `(done, total)` bytes.
     pub fn install_model(&self, model: &Model, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
+        self.install_archive(model, "model.bin", opts, on_step)
+    }
+
+    /// The download, check and extraction both kinds of pack share; `required` is the file an archive of this kind must contain.
+    fn install_archive(&self, model: &Model, required: &str, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
         let unpublished = |u: &String| u.trim().is_empty() || u == "TBD";
         if model.urls.is_empty() || model.urls.iter().any(unpublished) || model.sha256.is_empty() || model.sha256 == "TBD" {
             return Err(ModelError::NotPublished(model.id.clone()));
@@ -237,7 +268,7 @@ impl ModelStore {
         if tmp.exists() {
             fs::remove_dir_all(&tmp)?;
         }
-        if let Err(err) = extract_zip(&part, &tmp) {
+        if let Err(err) = extract_zip(&part, &tmp, required) {
             let _ = fs::remove_dir_all(&tmp);
             return Err(err);
         }
@@ -421,7 +452,7 @@ pub enum StepKind {
     Extracting,
 }
 
-fn extract_zip(archive: &Path, into: &Path) -> Result<()> {
+fn extract_zip(archive: &Path, into: &Path, required: &str) -> Result<()> {
     let mut zip = zip::ZipArchive::new(File::open(archive)?)?;
     fs::create_dir_all(into)?;
     for i in 0..zip.len() {
@@ -437,8 +468,8 @@ fn extract_zip(archive: &Path, into: &Path) -> Result<()> {
             std::io::copy(&mut entry, &mut File::create(&out)?)?;
         }
     }
-    if !into.join("model.bin").exists() {
-        return Err(ModelError::InvalidArchive("model.bin is missing".into()));
+    if !into.join(required).exists() {
+        return Err(ModelError::InvalidArchive(format!("{required} is missing")));
     }
     Ok(())
 }
@@ -915,5 +946,60 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let err = store.install_language(&Catalog::default(), "xx", &opts(&cancel), &mut |_| {}).unwrap_err();
         assert_eq!(err.code(), "unknown_language");
+    }
+
+    fn dictionary_archive(dir: &Path) -> Archive {
+        let path = dir.join("de-en.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, data) in [("info.json", "{}"), ("de-en.dict", "fake"), ("en-de.dict", "fake")] {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(data.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        (path.clone(), sha256_file(&path).unwrap(), fs::metadata(&path).unwrap().len())
+    }
+
+    fn dictionary(archive: &Archive) -> Dictionary {
+        Dictionary {
+            id: "de-en".into(),
+            languages: vec!["de".into(), "en".into()],
+            urls: vec![file_url(&archive.0)],
+            size_bytes: archive.2,
+            sha256: archive.1.clone(),
+            license: "CC-BY-SA-4.0".into(),
+            attribution: "Wiktionary contributors".into(),
+            source_url: "https://en.wiktionary.org".into(),
+        }
+    }
+
+    #[test]
+    fn a_dictionary_pack_installs_verified_into_its_own_store_and_can_be_removed() {
+        let dir = temp_dir();
+        let store = ModelStore::new(dir.join("models"));
+        let archive = dictionary_archive(&dir);
+        let pack = dictionary(&archive);
+        let cancel = AtomicBool::new(false);
+        assert!(!store.is_dictionary_installed("de-en"));
+        store.install_dictionary(&pack, &opts(&cancel), &mut |_| {}).unwrap();
+        assert!(store.is_dictionary_installed("de-en"));
+        assert!(store.dictionary_dir("de-en").join("de-en.dict").exists());
+        // Translation models do not see it (so cleaning up unused models can never delete it).
+        assert!(store.installed_models().is_empty());
+        assert!(store.orphaned_models(&Catalog::default()).is_empty());
+        store.remove_dictionary("de-en").unwrap();
+        assert!(!store.is_dictionary_installed("de-en") && !store.dictionary_dir("de-en").exists());
+    }
+
+    #[test]
+    fn a_dictionary_pack_with_a_wrong_checksum_is_refused_and_leaves_nothing_behind() {
+        let dir = temp_dir();
+        let store = ModelStore::new(dir.join("models"));
+        let archive = dictionary_archive(&dir);
+        let pack = Dictionary { sha256: "0".repeat(64), ..dictionary(&archive) };
+        let cancel = AtomicBool::new(false);
+        let err = store.install_dictionary(&pack, &opts(&cancel), &mut |_| {}).unwrap_err();
+        assert!(matches!(err, ModelError::Checksum { .. }), "{err:?}");
+        assert!(!store.is_dictionary_installed("de-en") && !store.dictionary_dir("de-en").exists());
     }
 }

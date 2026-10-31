@@ -471,5 +471,22 @@
         "opus-mt-zh-en-ct2-int8"
       ]
     }
+  ],
+  "dictionaries": [
+    {
+      "id": "de-en",
+      "languages": [
+        "de",
+        "en"
+      ],
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-dictionaries/resolve/1f06838cde2d6111db97b23f19f44782808bcb8f/de-en.zip"
+      ],
+      "sizeBytes": 11502979,
+      "sha256": "9a766e4e34d39e91b46944de96cc0c00056c256ac520c25a19f40878c9439bd1",
+      "license": "CC-BY-SA-4.0",
+      "attribution": "Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org",
+      "sourceUrl": "https://en.wiktionary.org"
+    }
   ]
 }

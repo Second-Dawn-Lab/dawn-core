@@ -678,6 +678,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawn-dict"
+version = "0.0.0"
+dependencies = [
+ "dawn-models",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dawn-docs"
 version = "0.0.0"
 dependencies = [

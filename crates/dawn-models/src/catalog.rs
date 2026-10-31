@@ -16,6 +16,50 @@ pub struct Catalog {
     pub hub: String,
     pub models: Vec<Model>,
     pub languages: Vec<Language>,
+    /// Offline dictionaries (packs of type "dictionary"): one pack per language pair, both directions inside.
+    #[serde(default)]
+    pub dictionaries: Vec<Dictionary>,
+}
+
+/// A dictionary pack for a language pair. Downloaded, verified and extracted like a model, but kept apart from the
+/// translation models (own folder and list), so removing a language never touches it and the other way round.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Dictionary {
+    /// `en-de`: the two language codes, in alphabetical order.
+    pub id: String,
+    pub languages: Vec<String>,
+    pub urls: Vec<String>,
+    pub size_bytes: u64,
+    pub sha256: String,
+    /// The license of the data ("CC-BY-SA-4.0"): the pack stays under it.
+    pub license: String,
+    /// Who the data is from, to show wherever the dictionary is used.
+    pub attribution: String,
+    /// Where to read more or find the original entries.
+    pub source_url: String,
+}
+
+impl Dictionary {
+    /// The pack as a downloadable archive, for the shared download and install code.
+    pub fn as_model(&self) -> Model {
+        Model {
+            id: self.id.clone(),
+            sources: self.languages.clone(),
+            targets: self.languages.clone(),
+            urls: self.urls.clone(),
+            size_bytes: self.size_bytes,
+            sha256: self.sha256.clone(),
+            license: self.license.clone(),
+            attribution: self.attribution.clone(),
+            prefix: None,
+            target_tokens: BTreeMap::new(),
+        }
+    }
+
+    pub fn covers(&self, a: &str, b: &str) -> bool {
+        a != b && self.languages.iter().any(|l| l == a) && self.languages.iter().any(|l| l == b)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +117,7 @@ impl Model {
 
 impl Default for Catalog {
     fn default() -> Self {
-        Self { version: 2, hub: "en".into(), models: vec![], languages: vec![] }
+        Self { version: 2, hub: "en".into(), models: vec![], languages: vec![], dictionaries: vec![] }
     }
 }
 
@@ -89,6 +133,15 @@ impl Catalog {
 
     pub fn language(&self, code: &str) -> Option<&Language> {
         self.languages.iter().find(|l| l.code == code)
+    }
+
+    pub fn dictionary(&self, id: &str) -> Option<&Dictionary> {
+        self.dictionaries.iter().find(|d| d.id == id)
+    }
+
+    /// The dictionary that has both languages (in either order).
+    pub fn dictionary_for(&self, a: &str, b: &str) -> Option<&Dictionary> {
+        self.dictionaries.iter().find(|d| d.covers(a, b))
     }
 
     pub fn model(&self, id: &str) -> Option<&Model> {
@@ -228,6 +281,37 @@ mod tests {
                     let commit = rest.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
                     assert!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "{}: {url} lacks a commit hash", m.id);
                     assert!(url.ends_with(&format!("/{}.zip", m.id)), "{}: {url} names another file", m.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dictionaries_cover_a_pair_in_either_order_and_are_not_translation_models() {
+        let catalog = Catalog::bundled();
+        let en_de = catalog.dictionary_for("en", "de").expect("the German-English dictionary");
+        assert_eq!(en_de.id, "de-en");
+        assert!(en_de.covers("en", "de") && !en_de.covers("en", "fr") && !en_de.covers("en", "en"));
+        assert!(en_de.license.starts_with("CC-BY-SA"), "{}", en_de.license);
+        assert!(en_de.attribution.contains("Wiktionary") && en_de.attribution.contains("kaikki.org"), "{}", en_de.attribution);
+        // A dictionary is never listed among the models a language needs.
+        assert!(catalog.model(&en_de.id).is_none());
+        let model = en_de.as_model();
+        assert_eq!((model.sha256.as_str(), model.size_bytes), (en_de.sha256.as_str(), en_de.size_bytes));
+    }
+
+    /// Same rule as for the translation packs: https, and on Hugging Face a commit hash, never a moving ref.
+    #[test]
+    fn dictionary_urls_are_https_and_pinned_to_a_commit() {
+        let catalog = Catalog::bundled();
+        for d in &catalog.dictionaries {
+            assert!(!d.urls.is_empty() && d.sha256.len() == 64, "{} is not published", d.id);
+            for url in &d.urls {
+                assert!(url.starts_with("https://") && !url.contains("/resolve/main/"), "{}: {url}", d.id);
+                if let Some(rest) = url.strip_prefix("https://huggingface.co/") {
+                    let commit = rest.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+                    assert!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "{}: {url} lacks a commit hash", d.id);
+                    assert!(url.ends_with(&format!("/{}.zip", d.id)) || url.ends_with(&format!("/dictionary-{}.zip", d.id)), "{}: {url} names another file", d.id);
                 }
             }
         }

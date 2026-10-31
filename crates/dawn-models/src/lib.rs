@@ -9,6 +9,6 @@ pub mod download;
 pub mod error;
 pub mod store;
 
-pub use catalog::{Catalog, Language, Model};
+pub use catalog::{Catalog, Dictionary, Language, Model};
 pub use error::{ModelError, Result};
 pub use store::{sha256_file, InstallOptions, InstalledModel, LanguageSizes, ModelStore, Step, StepKind};

@@ -1,7 +1,8 @@
-# Offline dictionary: data decision (B1)
+# Offline dictionary (`dawn-dict`)
 
-Status: **decided on paper, not built.** The Dictionary tab in the word popup still says "Coming soon". This page is what
-was found and what has to be settled before the pack and the engine are written.
+Status: **built.** The license of the kaikki.org data was confirmed: it is Wiktionary's (CC BY-SA, with GFDL); kaikki.org adds no
+terms and only asks to cite wiktextract and link to kaikki.org. The pack is published as `Second-Dawn-Lab/owll-dictionaries`
+and installs from the Language packs page, or the first time the Dictionary tab is opened.
 
 ## What a dictionary pack needs
 
@@ -14,36 +15,64 @@ choice: a plain word list cannot do it.
 | | Wiktionary through kaikki.org (wiktextract) | FreeDict (deu-eng, eng-deu) |
 |---|---|---|
 | Origin | Wiktionary, parsed into JSON lines by `wiktextract` | the `ding` database of TU Chemnitz (Frank Richter), converted to TEI |
-| License | Wiktionary's text is **CC BY-SA** (4.0, and GFDL as a second option). The kaikki.org page itself states no license and asks for a citation of the Wiktextract paper and a link back | **GPL-2+** according to Debian's copyright file for the package (`deu-eng/*`, "FreeDict contributors"); the AUR package lists GPL/AGPL3. The upstream license text inside the archives was not read |
+| License | Wiktionary's text is **CC BY-SA** (4.0, and GFDL as a second option); kaikki.org adds no terms | **GPL-2+** according to Debian's copyright file for the package; the upstream license text inside the archives was not read |
 | Duties | credit Wiktionary and its editors with a link; the pack stays CC BY-SA (share-alike). The app code is a separate work and stays MIT | GPL: the pack would have to be offered under the GPL with its source; mixing with an MIT app is arguable and not worth the risk |
-| Coverage | the English edition has entries for words of almost every language **with English glosses**: German to English from the German entries, English to German from the `translations` lists of English entries. Other languages vary a lot in size | 517,534 German to English and 460,315 English to German headwords; many other pairs, mostly small (French to German 48,578; English to Russian 62,181) |
-| Entry quality | glosses (definitions, not always short equivalents), part of speech, genders, examples for part of the entries, **inflection tables as `forms`** for German nouns, verbs and adjectives | short translation pairs; no inflection data, little grammar |
-| Lemmatization | yes, from the data itself: every form in `forms` points back to its headword | no; would need another source |
-| Size | English edition, all languages, is 24.8 GB of JSON (2.9 GB gzipped); the German edition 2.9 GB (296 MB gzipped). A German-only slice compiled to a compact index is expected in the tens of MB per pair. **Not measured**: the multi-gigabyte dumps were not downloaded | not stated on the download page; StarDict archives |
+| Coverage | the English edition has entries for words of almost every language with English glosses | 517,534 German to English and 460,315 English to German headwords; many more pairs, mostly small |
+| Entry quality | glosses, part of speech, genders, examples, **inflection tables as `forms`** | short translation pairs; no inflection data, little grammar |
+| Lemmatization | yes, from the data itself | no |
 
 Not considered because their terms forbid redistribution: dict.cc, Linguee, PONS, Leo.
 
-## Decision
+**Decision: Wiktionary (kaikki.org extracts), CC BY-SA, as separate downloadable packs.** FreeDict was rejected: the GPL, and no forms.
 
-**Wiktionary (kaikki.org extracts), CC BY-SA, as separate downloadable packs.** It is the only source that is clearly
-allowed to be redistributed under conditions the project can meet, and the only one that carries the inflection data the
-lemma lookup needs. FreeDict is rejected: the GPL, and no forms.
+## What was built
 
-Before the first pack is built, one check is still open: read the notice that ships with the downloaded extract (and
-`wiktextract`'s README) and confirm it says what Wiktionary says. That needs the large download and was not done here, so
-**no license claim in this page replaces that check.**
+* **Crate `dawn-dict`** (no dependencies besides serde): a read-only file per direction. Entries are JSON records; a sorted table of
+  lowercase keys points at them, so a lookup is a binary search and nothing is parsed until an entry is asked for. A key is a
+  headword or an **inflected form**; the file is read into memory (31 MB for German to English).
+* **Lemma lookup** needs no rules: it uses Wiktionary's own data. A base form's `forms` table ("Haus": Hauses, Häuser; "gehen":
+  ging, gegangen, geht, ...) and the entries that only say "inflection of X" both become keys that lead to X. A word that is a
+  headword *and* a form ("erstaunt") returns both, the headword first. Table metadata, phrases ("ich gehe") and forms with
+  spaces are not keys. Unknown words get the closest headwords (prefix, else one or two edits). Not covered: compound
+  splitting (a German compound that is not an entry is not found) and forms Wiktionary has no table for.
+* **German to English** comes from the German entries (English glosses, head line with gender/plural/verb forms, up to two
+  examples). **English to German** comes from the `translations` of English entries (sense groups, with gender, without dialect
+  and obsolete words) plus a reverse index built from the English glosses of the German entries ("house, building" gives
+  "Haus n" under *house*); English inflected forms and "form of" entries come from the English extract. The English file alone only
+  has German translations for about 5,100 words, which is why the reverse index is there.
+* **Pack** `de-en.zip`: `info.json`, `NOTICE.txt` (credit), `de-en.dict`, `en-de.dict`. Catalog list `dictionaries`, own folder
+  and list inside the model store (so removing a language never touches it), the same download and sha256 check as language
+  packs, pinned to a commit of the Hugging Face repo.
+* **Tools**: `dawn-dict-build to-english|from-english` (reads the kaikki.org JSONL, streamed from `curl` if wanted) and
+  `tools/build-dictionary-pack.py` (zip + model card).
 
-## Plan once approved
+## Pack sizes
 
-1. `tools/` script (not part of the app): read the extract for German, keep headword, POS, glosses (shortened and
-   ranked), up to two examples, gender/plural and verb forms, and the `forms` table; write one compact file per pair.
-2. A `dawn-dict` crate with a read-only index (an FST or SQLite file), lookup by exact headword, by form (lemma) and by
-   prefix (closest headwords for "No entry for ...").
-3. Packs as catalog type `"dictionary"` per pair in the existing model store, SHA-256 verified like the language packs;
-   hosted in a public Hugging Face repo `Second-Dawn-Lab/owll-dictionaries` with a model card (source, license, credit),
-   catalog URLs pinned to the commit.
-4. UI: the Dictionary tab of the word popup, a collapsible Dictionary panel in the Text tab and the editor, attribution in
-   About and on the Language packs page.
+| Pair | Direction | Entries | Keys | File |
+|---|---|---|---|---|
+| German and English | German to English | 102,897 | 482,296 | 30.6 MB |
+| | English to German | 78,440 | 151,614 | 14.6 MB |
+| | both, `de-en.zip` | | | 45.2 MB raw, **11.5 MB download** |
 
-Estimated as the next release's main piece of work: the extract tooling and the lemma tables are the larger part, the UI
-reuses the word popup and the editor's panels.
+## Rebuilding
+
+```text
+curl -O https://kaikki.org/dictionary/German/kaikki.org-dictionary-German.jsonl        (1.1 GB)
+dawn-dict-build to-english de kaikki.org-dictionary-German.jsonl de-en.dict
+curl -sL https://kaikki.org/dictionary/English/kaikki.org-dictionary-English.jsonl |      (3.4 GB, streamed)
+  dawn-dict-build from-english de kaikki.org-dictionary-German.jsonl - en-de.dict
+python tools/build-dictionary-pack.py <folder with both .dict> <out>
+hf upload Second-Dawn-Lab/owll-dictionaries <out> . --include "de-en.zip" --include "README.md"
+```
+
+Then put the new commit hash, size and sha256 into `models/catalog.json` (`dictionaries`).
+
+## Credit (About, the Language packs page, the model card)
+
+Wiktionary contributors (CC BY-SA 4.0), data extracted by wiktextract and published by kaikki.org. The packs stay CC BY-SA 4.0;
+the app is MIT.
+
+## Next
+
+More pairs: the same tools work for any language the English edition has entries for (French, Spanish, ...): one more
+`to-english` and `from-english` run and one more catalog entry per pair.
