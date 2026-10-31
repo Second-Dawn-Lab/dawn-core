@@ -20,6 +20,6 @@ pub mod stable;
 pub use change::{is_black, signature, BlackEvent, BlackWatch, ChangeDetector, Signature};
 pub use lines::{group_sentences, split_lines, Delta, LineTracker};
 pub use pipeline::{Pipeline, Step};
-pub use place::{physical, place_bar, Rect};
+pub use place::{physical, place_bar, place_popup, Rect};
 pub use rate::{interval_ms, Speed};
 pub use stable::{nearly_same, similarity, Stabilizer, Verdict};

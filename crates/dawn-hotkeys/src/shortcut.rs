@@ -155,6 +155,56 @@ pub fn everyday_shortcut_warning(s: &Shortcut) -> Option<&'static str> {
     (!s.double && only_ctrl && "CXVAZYSF".contains(letter)).then_some("this fires every time you use a standard editing shortcut")
 }
 
+/// A shortcut other programs use for something. Owl-L only *observes* keys, it never takes them away, so the program in
+/// front still reacts to the same keys (Ctrl+L focuses the address bar of a browser while Owl-L starts live captions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KnownShortcut {
+    /// A short stable id the window turns into text ("address", "print").
+    pub id: &'static str,
+}
+
+/// The well-known Ctrl+key shortcuts (and Alt/Shift combinations that programs rely on). The list is about what is almost
+/// everywhere, not complete: browsers, editors, Office and the file explorer.
+const KNOWN: &[(&str, &str)] = &[
+    ("Ctrl+L", "address"),
+    ("Ctrl+P", "print"),
+    ("Ctrl+S", "save"),
+    ("Ctrl+F", "find"),
+    ("Ctrl+H", "replace"),
+    ("Ctrl+T", "newtab"),
+    ("Ctrl+W", "closetab"),
+    ("Ctrl+N", "new"),
+    ("Ctrl+O", "open"),
+    ("Ctrl+R", "reload"),
+    ("Ctrl+D", "bookmark"),
+    ("Ctrl+K", "link"),
+    ("Ctrl+E", "search"),
+    ("Ctrl+B", "bold"),
+    ("Ctrl+I", "italic"),
+    ("Ctrl+U", "underline"),
+    ("Ctrl+G", "goto"),
+    ("Ctrl+Shift+T", "reopen"),
+    ("Ctrl+Shift+N", "private"),
+    ("Ctrl+Shift+S", "saveas"),
+    ("Ctrl+Shift+P", "palette"),
+    ("Ctrl+Shift+F", "findall"),
+    ("Alt+D", "address"),
+    ("Alt+F", "menu"),
+    ("Alt+E", "menu"),
+    ("Alt+V", "menu"),
+    ("Win+L", "lock"),
+    ("Win+D", "desktop"),
+    ("Win+E", "explorer"),
+    ("Win+R", "run"),
+    ("Win+S", "winsearch"),
+    ("Win+V", "clipboard"),
+];
+
+/// Is this combination (single or double press, the same keys either way) a well-known shortcut of other programs?
+pub fn known_shortcut(s: &Shortcut) -> Option<KnownShortcut> {
+    KNOWN.iter().find(|(text, _)| text.parse::<Shortcut>().is_ok_and(|k| k.same_combo(s))).map(|(_, id)| KnownShortcut { id })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +263,20 @@ mod tests {
         assert!(everyday_shortcut_warning(&parse("Ctrl+C C")).is_none());
         assert!(everyday_shortcut_warning(&parse("Ctrl+Alt+C")).is_none());
         assert!(everyday_shortcut_warning(&parse("Ctrl+F8")).is_none());
+    }
+
+    #[test]
+    fn well_known_shortcuts_of_other_programs_are_recognized_single_or_double() {
+        assert_eq!(known_shortcut(&parse("Ctrl+L")).map(|k| k.id), Some("address"));
+        // A double press still fires the other program's shortcut twice.
+        assert_eq!(known_shortcut(&parse("Ctrl+L L")).map(|k| k.id), Some("address"));
+        assert_eq!(known_shortcut(&parse("ctrl+shift+t t")).map(|k| k.id), Some("reopen"));
+        assert_eq!(known_shortcut(&parse("Win+V")).map(|k| k.id), Some("clipboard"));
+        // Owl-L's own defaults are not on the list.
+        for own in ["Ctrl+Shift+O", "Ctrl+Shift+L", "Ctrl+C C"] {
+            assert!(known_shortcut(&parse(own)).is_none() || own == "Ctrl+C C", "{own}");
+        }
+        assert!(known_shortcut(&parse("Ctrl+Alt+L")).is_none());
+        assert!(known_shortcut(&parse("Ctrl+F8")).is_none());
     }
 }

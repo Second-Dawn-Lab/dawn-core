@@ -61,6 +61,27 @@ pub fn place_bar(region: Rect, bar_w: u32, bar_h: u32, monitors: &[Rect], gap: i
     Rect::new(x, y, w, h)
 }
 
+/// Where a small list window goes: under the control it belongs to, as wide as the control at least, flipped above it when
+/// there is no room below, and always inside the monitor of the control (a list taller than the room is shortened to fit).
+pub fn place_popup(anchor: Rect, width: u32, height: u32, monitors: &[Rect], gap: i32) -> Rect {
+    let Some(m) = monitor_of(&anchor, monitors) else { return Rect::new(anchor.x, anchor.bottom() + gap, width, height) };
+    let w = width.max(anchor.w).min(m.w);
+    let x = anchor.x.clamp(m.x, (m.right() - w as i32).max(m.x));
+    let below_room = (m.bottom() - (anchor.bottom() + gap)).max(0) as u32;
+    let above_room = (anchor.y - gap - m.y).max(0) as u32;
+    // Below when it fits, else above when it fits, else on the side with more room, shortened.
+    if height <= below_room {
+        Rect::new(x, anchor.bottom() + gap, w, height)
+    } else if height <= above_room {
+        Rect::new(x, anchor.y - gap - height as i32, w, height)
+    } else if below_room >= above_room {
+        Rect::new(x, anchor.bottom() + gap, w, below_room.max(60).min(height))
+    } else {
+        let h = above_room.max(60).min(height);
+        Rect::new(x, anchor.y - gap - h as i32, w, h)
+    }
+}
+
 /// A size in logical pixels as physical pixels on a monitor with this scale (1.0 = 100 %).
 pub fn physical(logical: u32, scale: f64) -> u32 {
     (logical as f64 * scale).round() as u32
@@ -132,5 +153,31 @@ mod tests {
     fn no_monitors_still_gives_a_rectangle() {
         let bar = place_bar(Rect::new(10, 10, 100, 50), 300, 80, &[], 8);
         assert_eq!((bar.x, bar.y), (10, 68));
+    }
+
+    #[test]
+    fn a_list_goes_under_its_control_or_above_it_and_stays_on_the_monitor() {
+        let below = place_popup(Rect::new(100, 200, 160, 30), 200, 300, &[PRIMARY], 4);
+        assert_eq!(below, Rect::new(100, 234, 200, 300));
+        // Near the bottom: above.
+        let above = place_popup(Rect::new(100, 1000, 160, 30), 200, 300, &[PRIMARY], 4);
+        assert_eq!((above.y, above.bottom()), (1000 - 4 - 300, 1000 - 4));
+        // At the right edge: pulled left to fit.
+        let edge = place_popup(Rect::new(1850, 200, 60, 30), 200, 300, &[PRIMARY], 4);
+        assert_eq!(edge.right(), 1920);
+        // As wide as the control at least.
+        assert_eq!(place_popup(Rect::new(10, 10, 400, 30), 200, 100, &[PRIMARY], 4).w, 400);
+    }
+
+    #[test]
+    fn a_list_taller_than_the_room_is_shortened_on_the_roomier_side_and_follows_other_monitors() {
+        // The bar sits at the bottom of a short monitor: more room above than below.
+        let short = Rect::new(0, 0, 1920, 400);
+        let tall = place_popup(Rect::new(100, 300, 100, 30), 200, 500, &[short], 4);
+        assert!(tall.h < 500 && tall.y >= 0 && tall.bottom() <= 400, "{tall:?}");
+        let on_right = place_popup(Rect::new(2500, 600, 120, 30), 200, 300, &[PRIMARY, RIGHT], 4);
+        assert!(on_right.x >= 1920 && on_right.right() <= 4480, "{on_right:?}");
+        let on_left = place_popup(Rect::new(-500, 300, 120, 30), 200, 300, &[PRIMARY, LEFT], 4);
+        assert!(on_left.x >= -1280 && on_left.right() <= 0, "{on_left:?}");
     }
 }

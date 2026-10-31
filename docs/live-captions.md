@@ -41,11 +41,17 @@ grab region  ->  changed?  --no-->  same text as before (nothing is read)
 
 ## The caption bar
 
+The bar shows the **conversation of the session**: every line (up to 2,000 in memory) with its time, in a list that follows the newest line while the reader
+is at the bottom, stops following when the reader scrolls up, and shows "Jump to latest (N new)" (`scrollModel.ts`). The bar can be resized taller; its size is kept
+in the settings. When the session ends the bar stays open and asks whether to save the conversation to the History (Save / Don't save, "Remember my choice" stores
+Always or Never); a saved session is one History entry whose lines are kept in a file of their own (`live-sessions/<id>.json`), opened from the History tab.
+Language lists and menus of the bar (and of the quick popup) open in a small window of their own (`picker.rs`), because a drop-down inside a small window is cut off.
+
 A transparent window with a rounded surface, always on top, not in the taskbar, draggable and resizable, in the app's theme (light and dark),
 with 1 to 3 lines (setting), text size 16 to 48 px, background opacity 30 to 100 %, an optional small original line, RTL output through
 `dir="auto"`. On hover: language pickers, pause/resume, history (about 50 lines, copy, export to a .txt file), change region, lock,
 settings, close. **Lock** makes the bar click-through (`set_ignore_cursor_events`); the tray entry "Unlock the caption bar" or the
-shortcut unlocks it (the next press stops). Lines are only kept in the History when "Save live caption transcripts" is on (off by default).
+shortcut unlocks it (the next press stops). Nothing is written to the History unless the user answers Save (or chose Always).
 
 The bar and the overlays call `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, so the bar never appears in what the loop grabs and
 can sit over the region. This needs Windows 10 version 2004 or later; on older systems the call fails and the bar should be kept

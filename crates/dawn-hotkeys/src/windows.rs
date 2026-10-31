@@ -106,7 +106,19 @@ impl Hotkeys {
             let _ = ready_tx.send(Ok(unsafe { GetCurrentThreadId() }));
             // The message loop keeps the hook callbacks coming; WM_QUIT ends it.
             let mut msg = MSG::default();
-            while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {}
+            let tracing = std::env::var_os("DAWN_TRACE_KEYS").is_some();
+            if tracing {
+                eprintln!("[hotkeys] hook installed, waiting for keys");
+            }
+            loop {
+                let got = unsafe { GetMessageW(&mut msg, None, 0, 0) }.0;
+                if got <= 0 {
+                    if tracing {
+                        eprintln!("[hotkeys] message loop ended ({got})");
+                    }
+                    break;
+                }
+            }
             let _ = unsafe { UnhookWindowsHookEx(hook) };
             SINK.with(|s| *s.borrow_mut() = None);
         })?;
@@ -145,9 +157,14 @@ impl Drop for Hotkeys {
 
 fn worker_loop(rx: Receiver<Msg>, on_event: impl Fn(&str, Outcome)) {
     let mut engine = Engine::new(DEFAULT_WINDOW_MS);
+    // `DAWN_TRACE_KEYS=1` prints every key event the hook delivers (to find out why a shortcut does nothing).
+    let trace_keys = std::env::var_os("DAWN_TRACE_KEYS").is_some();
     while let Ok(msg) = rx.recv() {
         match msg {
             Msg::Key(ev) => {
+                if trace_keys {
+                    eprintln!("[hotkeys] key vk=0x{:02X} {} t={}", ev.vk, if ev.down { "down" } else { "up" }, ev.time_ms);
+                }
                 for (name, outcome) in engine.on_event(ev) {
                     on_event(&name, outcome);
                 }
@@ -247,4 +264,67 @@ pub fn send_paste() {
 /// The left mouse button is held down right now (any window).
 pub fn left_button_down() -> bool {
     (unsafe { GetAsyncKeyState(0x01) } as u16) & 0x8000 != 0
+}
+
+/// The keyboard hook sees keys typed by a program (`SendInput`) the same way as keys from the keyboard, so the whole chain
+/// (hook, channel, engine, callback) can be checked without hands. It types real keys into the foreground window, so it is
+/// ignored by default:
+///
+/// ```text
+/// cargo test -p dawn-hotkeys real_hook -- --ignored --nocapture
+/// ```
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    fn type_keys(keys: &[(u16, bool)]) {
+        for (vk, up) in keys {
+            let input = INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: VIRTUAL_KEY(*vk), wScan: 0, dwFlags: if *up { KEYEVENTF_KEYUP } else { KEYBD_EVENT_FLAGS(0) }, time: 0, dwExtraInfo: 0 } },
+            };
+            unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+            thread::sleep(Duration::from_millis(40));
+        }
+    }
+
+    #[test]
+    #[ignore = "types real keys into the foreground window"]
+    fn real_hook_fires_a_double_press_of_any_letter_and_a_single_press() {
+        let seen: Arc<Mutex<Vec<(String, Outcome)>>> = Arc::default();
+        let sink = seen.clone();
+        let hooks = Hotkeys::start(
+            vec![("live".into(), "Ctrl+Alt+L L".parse().unwrap()), ("capture".into(), "Ctrl+Alt+F9".parse().unwrap()), ("translate".into(), "Ctrl+Alt+K K".parse().unwrap())],
+            move |name, outcome| sink.lock().unwrap().push((name.to_string(), outcome)),
+        )
+        .expect("the hook");
+        let (ctrl, alt, l, k, f9) = (0x11u16, 0x12u16, 0x4Cu16, 0x4Bu16, 0x78u16);
+        // Ctrl+Alt+L L, a slow Ctrl+Alt+K ... K (too late), and Ctrl+Alt+F9.
+        type_keys(&[(ctrl, false), (alt, false), (l, false), (l, true), (l, false), (l, true), (alt, true), (ctrl, true)]);
+        thread::sleep(Duration::from_millis(600));
+        type_keys(&[(ctrl, false), (alt, false), (k, false), (k, true)]);
+        thread::sleep(Duration::from_millis(700));
+        type_keys(&[(k, false), (k, true), (alt, true), (ctrl, true)]);
+        type_keys(&[(ctrl, false), (alt, false), (f9, false), (f9, true), (alt, true), (ctrl, true)]);
+        thread::sleep(Duration::from_millis(300));
+        drop(hooks);
+        let got = seen.lock().unwrap().clone();
+        println!("{got:?}");
+        assert!(got.contains(&("live".to_string(), Outcome::Fired)), "a double press of L must fire: {got:?}");
+        assert!(got.contains(&("capture".to_string(), Outcome::Fired)), "a single press must fire: {got:?}");
+        assert!(!got.contains(&("translate".to_string(), Outcome::Fired)), "a too slow second press must not fire: {got:?}");
+    }
+
+    #[test]
+    #[ignore = "waits eight seconds for keys typed by another program"]
+    fn real_hook_listens_for_keys_typed_by_another_program() {
+        let seen: Arc<Mutex<Vec<(String, Outcome)>>> = Arc::default();
+        let sink = seen.clone();
+        let hooks = Hotkeys::start(vec![("live".into(), "Ctrl+Alt+L L".parse().unwrap())], move |name, outcome| sink.lock().unwrap().push((name.to_string(), outcome))).expect("the hook");
+        thread::sleep(Duration::from_secs(12));
+        drop(hooks);
+        println!("seen: {:?}", seen.lock().unwrap());
+    }
 }

@@ -22,3 +22,19 @@ Windows waits for a low-level hook callback on every key press. If it takes long
 
 
 The app decides what to do after the second press (reading the clipboard, ignoring blocked programs, showing a popup); the crate only reports that the shortcut fired and which program was in the foreground.
+
+## Every shortcut is a single or a double press
+
+Owl-L's shortcuts (quick access, area capture, live captions) all go through the same engine: one `Detector` per shortcut, fed by the one keyboard hook.
+Any of them can be a single press (`Ctrl+Shift+L`) or the same key twice within 400 ms with the modifiers held (`Ctrl+L L`). Tests: the detector, the engine, the
+settings round trip for all three names (`quick.rs`), and `real_hook_*` in `dawn-hotkeys` (ignored; types real keys with `SendInput` into the foreground window and
+checks that the hook reports a double press of a letter, a single press, and no double press when the second one is too slow).
+
+The editor accepts a letter, a digit, F1 to F12 or Space with Ctrl, Alt, Shift or Win; anything else is refused with a message. It warns about
+well-known shortcuts of other programs (`known_shortcut`: Ctrl+L address bar, Ctrl+P print, Ctrl+S save, Ctrl+F find, Win+L, ...) because the hook only *observes*
+keys: the program in front still reacts to the same keys. The settings page shows "Shortcut detected" when a shortcut fires, so a new one can be tried at once.
+
+When a shortcut seems to do nothing: set `DAWN_TRACE=1` (the app prints `hotkeys: listening for [...]` and `hotkey: <name> <FirstPress|Fired>`) and
+`DAWN_TRACE_KEYS=1` (every key event the hook delivers). No `[hotkeys] key` lines at all means the keys never reach the hook (another low-level hook, a remote
+session, a program running as administrator in front); key lines without `hotkey:` lines mean the sequence did not match (a modifier missing on the second press,
+the second press later than 400 ms).
