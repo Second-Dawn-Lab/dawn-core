@@ -28,6 +28,17 @@ export function createSettingsStore<T extends object>(
     state = next;
     listeners.forEach((l) => l());
   };
+  // Keys with a save still running. What the backend reports about such a key may be older than the local change (a slow
+  // answer to an earlier save, an announcement from before), so it is not applied until the save is through; keys
+  // nobody is changing take the backend's value.
+  const pending = new Map<keyof T, number>();
+  const applyFromBackend = (incoming: Partial<T>) => {
+    const next = { ...state };
+    for (const key of Object.keys(incoming) as (keyof T)[]) {
+      if (!pending.get(key)) next[key] = incoming[key] as T[keyof T];
+    }
+    set(next);
+  };
 
   return {
     getState: () => state,
@@ -37,11 +48,21 @@ export function createSettingsStore<T extends object>(
     },
     async init() {
       set({ ...defaults, ...(await backend.load()) });
-      await backend.subscribe?.((incoming) => set({ ...state, ...incoming }));
+      await backend.subscribe?.((incoming) => applyFromBackend(incoming));
     },
     async patch(patch) {
       set({ ...state, ...patch });
-      set({ ...state, ...(await backend.save(patch)) });
+      const keys = Object.keys(patch) as (keyof T)[];
+      keys.forEach((k) => pending.set(k, (pending.get(k) ?? 0) + 1));
+      const done = () => keys.forEach((k) => pending.set(k, (pending.get(k) ?? 1) - 1));
+      try {
+        const saved = await backend.save(patch);
+        done();
+        applyFromBackend(saved);
+      } catch (e) {
+        done();
+        throw e;
+      }
     },
   };
 }

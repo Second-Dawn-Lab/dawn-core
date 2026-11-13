@@ -72,6 +72,13 @@ On the development machine (debug build of the app crates, release CTranslate2 w
 The beam is `count + 2` wide with the same number of hypotheses; smaller beams were faster but gave fewer, less varied
 words. A word with only one plausible translation honestly shows "No other suggestion".
 
+## With Quality mode
+
+When Quality mode is on, the list comes from the language model instead (`prompts::alternatives`): it sees the source sentence, the translation and the clicked
+word, and gives other words that fit the grammar of the sentence, one per line; the answer is cleaned and deduplicated and the clicked word is listed first.
+Choosing one swaps the word in the sentence (the model does not rewrite the rest, unlike the translation-model list above). The odd entries ("mich" after "Ich bin")
+come from the translation model's probabilities and do not appear. If the model is unavailable or answers badly, the translation-model list is shown as before.
+
 ## Limits
 
 * The list shows what the *model* considers plausible at that position, not a thesaurus. For function words it can

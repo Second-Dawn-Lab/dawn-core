@@ -37,6 +37,12 @@ pub trait Runner: Send + Sync {
     /// Translate a batch of sentences with one model at the given beam size.
     fn run(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError>;
 
+    /// The same with stricter decoding (a higher repetition penalty, no repeated n-grams), for a sentence the normal pass
+    /// answered with a loop. Engines without such settings translate as usual.
+    fn run_strict(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
+        self.run(model, sentences, beam)
+    }
+
     /// Up to `limit` words for the position where the word at UTF-16 offset `word_start` of `sentence` (the
     /// translation of `source`) stands, the current word first. Engines that cannot do this say so, and the
     /// app hides the feature.
@@ -129,6 +135,9 @@ pub struct Segment {
     pub end: usize,
     /// The sentence was chosen by the user from the alternatives and stays as it is.
     pub pinned: bool,
+    /// The model fell into a loop on this sentence twice: `target` is what stood before the loop (or the source sentence
+    /// unchanged). The app says "Couldn't translate this sentence cleanly" and Quality mode does not start from it.
+    pub unclean: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -250,6 +259,8 @@ pub struct Router<R, N> {
     cache: Mutex<SentenceCache>,
     pins: Mutex<Pins>,
     glossary: RwLock<Arc<Glossary>>,
+    /// Output texts of sentences the model could not translate without a loop (see `run_guarded`).
+    unclean: Mutex<std::collections::HashSet<String>>,
 }
 
 /// Does `input` carry placeholders (the fallback strategy) rather than the target terms themselves?
@@ -288,13 +299,33 @@ impl<R: Resolver, N: Runner> Router<R, N> {
             cache: Mutex::new(SentenceCache::new(4096)),
             pins: Mutex::new(Pins::default()),
             glossary: RwLock::new(Arc::new(Glossary::default())),
+            unclean: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+
+    fn is_unclean(&self, text: &str) -> bool {
+        self.unclean.lock().unwrap_or_else(|e| e.into_inner()).contains(text)
+    }
+
+    fn mark_unclean(&self, text: &str) {
+        let mut set = self.unclean.lock().unwrap_or_else(|e| e.into_inner());
+        if set.len() > 2048 {
+            set.clear();
+        }
+        set.insert(text.to_string());
     }
 
     /// Use this glossary from now on. Cached sentences stay valid: they are keyed by the protected
     /// sentence, so a changed term simply gives a new key.
     pub fn set_glossary(&self, glossary: Glossary) {
         *self.glossary.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(glossary);
+    }
+
+    /// The glossary terms that occur in `sentence` for `from -> to`, also inflected ("owls" for "owl"). Quality mode hands
+    /// them to the language model, which inflects the target term to match.
+    pub fn glossary_terms_in(&self, from: &str, to: &str, sentence: &str) -> Vec<crate::glossary::TermForm> {
+        let glossary = self.glossary.read().unwrap_or_else(|e| e.into_inner()).clone();
+        crate::glossary::find_forms(sentence, &glossary.for_pair(from, to))
     }
 
     /// Remember the user's pick for a sentence (see [`Pins`]).
@@ -446,6 +477,16 @@ impl<R: Resolver, N: Runner> Router<R, N> {
             Plan::Pivot(a, b) => (vec![a, b], true),
         };
 
+        // English text is cleaned up before it is sent to the engine ("im" -> "I'm", "dont" -> "don't"): a typo that happens to be a
+        // word of the target language ("Im" is "in the" in German) would be carried through. What the user sees is unchanged.
+        let normalized;
+        let text = if from == "en" {
+            let terms: Vec<String> = self.glossary.read().unwrap_or_else(|e| e.into_inner()).for_pair(from, to).iter().map(|e| e.source.clone()).collect();
+            normalized = dawn_core::normalize::normalize_source(from, text, &terms);
+            normalized.as_str()
+        } else {
+            text
+        };
         let doc = split_document(text, from);
         let sources = doc.sentences();
         let total = sources.len();
@@ -536,7 +577,8 @@ impl<R: Resolver, N: Runner> Router<R, N> {
         }
 
         let final_text = snapshot(&output);
-        let segments = build_segments(&final_text, &sources, &last_inputs, &output, &pinned);
+        let unclean: Vec<bool> = output.iter().map(|o| o.as_deref().is_some_and(|t| self.is_unclean(t))).collect();
+        let segments = build_segments(&final_text, &sources, &last_inputs, &output, &pinned, &unclean);
         // Counted once per sentence in the final pass; the draft pass would count them twice.
         let glossary_hits = (0..total).map(|i| restore_count(&protected[i], output[i].as_deref().unwrap_or(""))).sum();
         let glossary_terms = term_hits(&segments, &protected, &output);
@@ -621,7 +663,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
             sentences.iter().map(|s| cache.get(model, beam, s)).collect()
         };
         let misses: Vec<String> = sentences.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(s, _)| s.clone()).collect();
-        let mut fresh = if misses.is_empty() { Vec::new() } else { self.runner.run(model, &misses, beam)? }.into_iter();
+        let mut fresh = if misses.is_empty() { Vec::new() } else { self.run_guarded(model, &misses, beam)? }.into_iter();
 
         let mut out = Vec::with_capacity(sentences.len());
         let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
@@ -635,6 +677,36 @@ impl<R: Resolver, N: Runner> Router<R, N> {
                 }
             }
         }
+        // A sentence that came out of an unclean first stage stays unclean (a pivot reads its output).
+        for (sentence, text) in sentences.iter().zip(&out) {
+            if self.is_unclean(sentence) {
+                self.mark_unclean(text);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `run`, with the guard against loops: an answer that fell into a repetition loop (or ran far past its input) is
+    /// asked again once with stricter decoding; if that fails too, the part before the loop is used (or the sentence
+    /// itself) and the sentence is remembered as unclean. A loop is never returned.
+    fn run_guarded(&self, model: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
+        let mut out = self.runner.run(model, sentences, beam)?;
+        let bad: Vec<usize> = (0..sentences.len().min(out.len())).filter(|&i| dawn_core::degenerate::find_degeneration(&sentences[i], &out[i]).is_some()).collect();
+        if bad.is_empty() {
+            return Ok(out);
+        }
+        let again_inputs: Vec<String> = bad.iter().map(|&i| sentences[i].clone()).collect();
+        let again = self.runner.run_strict(model, &again_inputs, beam)?;
+        for (&i, text) in bad.iter().zip(again) {
+            out[i] = match dawn_core::degenerate::find_degeneration(&sentences[i], &text) {
+                None => text,
+                Some(safe) => {
+                    let repaired = if safe.split_whitespace().count() >= 2 { safe } else { sentences[i].clone() };
+                    self.mark_unclean(&repaired);
+                    repaired
+                }
+            };
+        }
         Ok(out)
     }
 }
@@ -642,7 +714,7 @@ impl<R: Resolver, N: Runner> Router<R, N> {
 /// Where each translated sentence sits in the final text. Sentences are found in order, so equal
 /// sentences cannot be confused; if one cannot be found (it should always be there) there are no
 /// segments and the app simply offers no alternatives.
-fn build_segments(text: &str, sources: &[String], inputs: &[String], outputs: &[Option<String>], pinned: &[bool]) -> Vec<Segment> {
+fn build_segments(text: &str, sources: &[String], inputs: &[String], outputs: &[Option<String>], pinned: &[bool], unclean: &[bool]) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut cursor = 0;
     for i in 0..sources.len() {
@@ -657,6 +729,7 @@ fn build_segments(text: &str, sources: &[String], inputs: &[String], outputs: &[
             start: utf16(start_byte),
             end: utf16(end_byte),
             pinned: pinned[i],
+            unclean: unclean[i],
         });
         cursor = end_byte;
     }
@@ -1002,6 +1075,84 @@ mod tests {
         off.enabled = false;
         r.set_glossary(glossary(vec![off]));
         assert!(!r.translate("Hello. I'm astonished.", "en", "de", &no_cancel()).unwrap().text.contains("Alt xsdcv"));
+    }
+
+    /// Falls into a loop on the first pass; the strict pass answers `strict_answer`.
+    struct Loops {
+        strict_answer: &'static str,
+        strict_calls: Mutex<usize>,
+    }
+    impl Runner for Loops {
+        fn run(&self, _m: &ModelSpec, sentences: &[String], _b: usize) -> Result<Vec<String>, TranslateError> {
+            Ok(sentences.iter().map(|_| format!("Hallo, wie geht's dir? {}", "n ".repeat(30))).collect())
+        }
+        fn run_strict(&self, _m: &ModelSpec, sentences: &[String], _b: usize) -> Result<Vec<String>, TranslateError> {
+            *self.strict_calls.lock().unwrap() += 1;
+            Ok(sentences.iter().map(|_| self.strict_answer.to_string()).collect())
+        }
+    }
+
+    #[test]
+    fn a_loop_is_asked_again_once_with_stricter_settings_and_a_clean_answer_is_used() {
+        let loops = Loops { strict_answer: "Hallo, wie geht es dir?", strict_calls: Mutex::new(0) };
+        let r = Router::new(FakeResolver(ALL.iter().copied().collect()), loops, "en");
+        let out = r.translate("hi how are you ?", "en", "de", &no_cancel()).unwrap();
+        assert_eq!(out.text, "Hallo, wie geht es dir?");
+        assert_eq!(*r.runner.strict_calls.lock().unwrap(), 1);
+        assert!(out.segments.iter().all(|s| !s.unclean), "a clean second answer is not reported");
+    }
+
+    #[test]
+    fn a_loop_that_comes_back_shows_the_part_before_it_and_is_reported() {
+        let looping = "Hallo, wie geht's dir? n n n n n n n n n n";
+        let loops = Loops { strict_answer: looping, strict_calls: Mutex::new(0) };
+        let r = Router::new(FakeResolver(ALL.iter().copied().collect()), loops, "en");
+        let out = r.translate("hi how are you ?", "en", "de", &no_cancel()).unwrap();
+        assert_eq!(out.text, "Hallo, wie geht's dir?");
+        assert!(!out.text.contains("n n"));
+        assert!(out.segments[0].unclean);
+        // From the cache: still reported, and not asked again.
+        let again = r.translate("hi how are you ?", "en", "de", &no_cancel()).unwrap();
+        assert_eq!((again.text.as_str(), again.segments[0].unclean), ("Hallo, wie geht's dir?", true));
+        assert_eq!(*r.runner.strict_calls.lock().unwrap(), 1);
+    }
+
+    #[test]
+    fn when_nothing_but_a_loop_is_left_the_source_sentence_is_shown_unchanged() {
+        let loops = Loops { strict_answer: "n n n n n n n n", strict_calls: Mutex::new(0) };
+        // The first pass has a prefix; make that disappear too by using an input that the fake loops from the start.
+        struct OnlyLoop(Loops);
+        impl Runner for OnlyLoop {
+            fn run(&self, _m: &ModelSpec, s: &[String], _b: usize) -> Result<Vec<String>, TranslateError> {
+                Ok(s.iter().map(|_| "n n n n n n n n".to_string()).collect())
+            }
+            fn run_strict(&self, m: &ModelSpec, s: &[String], b: usize) -> Result<Vec<String>, TranslateError> {
+                self.0.run_strict(m, s, b)
+            }
+        }
+        let r = Router::new(FakeResolver(ALL.iter().copied().collect()), OnlyLoop(loops), "en");
+        let out = r.translate("hi softwar devllper", "en", "de", &no_cancel()).unwrap();
+        assert_eq!(out.text, "hi softwar devllper");
+        assert!(out.segments[0].unclean);
+    }
+
+    #[test]
+    fn english_text_is_cleaned_up_before_the_engine_sees_it_but_other_languages_are_not() {
+        let r = router(ALL);
+        let out = r.translate("im ali and i dont know", "en", "de", &no_cancel()).unwrap();
+        assert!(out.text.contains("(I'm ali and I don't know)"), "{}", out.text);
+        assert_eq!(out.segments[0].source, "I'm ali and I don't know");
+        let de = r.translate("Im Wald dont i", "de", "en", &no_cancel()).unwrap();
+        assert!(de.text.contains("(Im Wald dont i)"), "{}", de.text);
+    }
+
+    #[test]
+    fn glossary_terms_are_not_cleaned_up() {
+        let r = router(ALL);
+        r.set_glossary(glossary(vec![entry("dont panic", "keine Panik")]));
+        let out = r.translate("dont panic and dont run", "en", "de", &no_cancel()).unwrap();
+        assert!(out.text.contains("keine Panik") || out.text.contains("dont panic"), "{}", out.text);
+        assert!(out.text.contains("don't run"), "{}", out.text);
     }
 
     /// Translates a made-up word away ("xsdcv" -> "foo") but copies the placeholder tokens through.

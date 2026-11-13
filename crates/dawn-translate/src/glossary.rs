@@ -268,6 +268,67 @@ fn find_matches(chars: &[char], entries: &[&GlossaryEntry]) -> Vec<Match> {
     found
 }
 
+/// A glossary term as it stands in a sentence, possibly inflected ("owls" for the term "owl").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TermForm {
+    /// The term as the glossary lists it ("owl").
+    pub term: String,
+    /// The text in the sentence ("owls").
+    pub found: String,
+    /// What it must be translated as ("Eule").
+    pub target: String,
+}
+
+/// How many letters a form may add to a term ("owl" + "s", "es", "ing"); longer words are other words.
+const MAX_ENDING: usize = 3;
+
+/// The glossary terms in `sentence`, also in their inflected forms. This is for Quality mode, where the language model
+/// inflects the target term; the plain engine matches the term only as written (see [`protect`]).
+pub fn find_forms(sentence: &str, entries: &[&GlossaryEntry]) -> Vec<TermForm> {
+    let chars: Vec<char> = sentence.chars().collect();
+    let mut found: Vec<TermForm> = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let mut best: Option<(usize, usize, usize)> = None; // (entry, term length, end)
+        if i == 0 || !is_word_char(chars[i - 1]) || !is_word_char(chars[i]) {
+            for (k, e) in entries.iter().enumerate() {
+                let term: Vec<char> = e.source.trim().chars().collect();
+                let len = term.len();
+                if len == 0 || i + len > chars.len() || !term.iter().zip(&chars[i..i + len]).all(|(a, b)| chars_equal(*a, *b, e.match_case)) {
+                    continue;
+                }
+                let mut end = i + len;
+                if e.whole_word {
+                    if term[len - 1].is_alphabetic() {
+                        let mut extra = 0;
+                        while end < chars.len() && chars[end].is_alphabetic() && extra < MAX_ENDING {
+                            end += 1;
+                            extra += 1;
+                        }
+                    }
+                    if end < chars.len() && is_word_char(chars[end]) && is_word_char(chars[end - 1]) {
+                        continue; // part of a longer word
+                    }
+                }
+                if best.is_none_or(|(_, l, _)| len > l) {
+                    best = Some((k, len, end));
+                }
+            }
+        }
+        match best {
+            Some((k, _, end)) => {
+                let form = TermForm { term: entries[k].source.trim().to_string(), found: chars[i..end].iter().collect(), target: entries[k].target.clone() };
+                if !found.contains(&form) {
+                    found.push(form);
+                }
+                i = end;
+            }
+            None => i += 1,
+        }
+    }
+    found
+}
+
 /// What the glossary does to `sentence`: a fingerprint of the entries that match it (their terms, targets
 /// and options). A translation or a pinned choice made under one fingerprint is not valid under another,
 /// so adding, editing, disabling or switching a term re-translates the sentences it touches and no others.
@@ -374,6 +435,47 @@ pub fn restore(output: &str, protected: &Protected) -> Restored {
         }
     }
     Restored { text, applied, missing }
+}
+
+#[cfg(test)]
+mod form_tests {
+    use super::*;
+
+    fn entry(source: &str, target: &str) -> GlossaryEntry {
+        GlossaryEntry { id: 1, from: "en".into(), to: "de".into(), source: source.into(), target: target.into(), match_case: false, whole_word: true, enabled: true }
+    }
+
+    #[test]
+    fn inflected_forms_of_a_term_are_found() {
+        let owl = entry("owl", "Eule");
+        let forms = find_forms("The owls sleep. An owl's eyes. One Owl.", &[&owl]);
+        let found: Vec<&str> = forms.iter().map(|f| f.found.as_str()).collect();
+        assert_eq!(found, ["owls", "owl", "Owl"]);
+        assert!(forms.iter().all(|f| f.term == "owl" && f.target == "Eule"));
+    }
+
+    #[test]
+    fn longer_words_and_inner_text_are_not_forms() {
+        let owl = entry("owl", "Eule");
+        assert!(find_forms("A growl, a bowler and an owlishly shy man.", &[&owl]).is_empty());
+        let cat = entry("cat", "Katze");
+        assert!(find_forms("The category and the catalogue.", &[&cat]).is_empty());
+    }
+
+    #[test]
+    fn the_longest_term_wins_and_case_can_matter() {
+        let (owl, snowy) = (entry("owl", "Eule"), entry("snowy owl", "Schneeeule"));
+        let forms = find_forms("Two snowy owls and an owl.", &[&owl, &snowy]);
+        assert_eq!(forms.iter().map(|f| (f.term.as_str(), f.found.as_str())).collect::<Vec<_>>(), [("snowy owl", "snowy owls"), ("owl", "owl")]);
+        let strict = GlossaryEntry { match_case: true, ..entry("Owl", "Eule") };
+        assert!(find_forms("an owl", &[&strict]).is_empty());
+    }
+
+    #[test]
+    fn a_term_that_does_not_end_in_a_letter_is_matched_as_written() {
+        let t = entry("C++", "C++");
+        assert_eq!(find_forms("I like C++ a lot.", &[&t]).len(), 1);
+    }
 }
 
 #[cfg(test)]

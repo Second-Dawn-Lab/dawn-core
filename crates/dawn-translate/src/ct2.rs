@@ -251,18 +251,70 @@ impl Runner for Ct2Runner {
     }
 
     fn run(&self, spec: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
+        self.run_with(spec, sentences, beam, false)
+    }
+
+    fn run_strict(&self, spec: &ModelSpec, sentences: &[String], beam: usize) -> Result<Vec<String>, TranslateError> {
+        self.run_with(spec, sentences, beam.max(4), true)
+    }
+}
+
+/// The longest answer a batch may have, in tokens, from its longest input (in characters): a translation is rarely much
+/// longer than its source, and a model that is looping would otherwise run to the hard limit of 512 tokens.
+pub fn max_decoding_for(inputs: &[String]) -> usize {
+    let longest = inputs.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+    (longest * 2 + 24).clamp(48, 512)
+}
+
+/// The decoding settings of a pass. The normal pass only penalizes repeating a little and caps the length; the strict pass
+/// (after a loop) also forbids repeating a group of three tokens.
+pub fn decoding_options(inputs: &[String], beam: usize, strict: bool) -> TranslationOptions<String, String> {
+    TranslationOptions::<String, String> {
+        beam_size: beam,
+        max_decoding_length: if strict { max_decoding_for(inputs).min(max_decoding_for(inputs) * 3 / 4 + 16) } else { max_decoding_for(inputs) },
+        repetition_penalty: if strict { 1.5 } else { 1.1 },
+        no_repeat_ngram_size: if strict { 3 } else { 0 },
+        ..Default::default()
+    }
+}
+
+impl Ct2Runner {
+    fn run_with(&self, spec: &ModelSpec, sentences: &[String], beam: usize, strict: bool) -> Result<Vec<String>, TranslateError> {
         let model = self.get(spec)?;
         let inputs: Vec<String> = match &spec.prefix {
             Some(prefix) => sentences.iter().map(|s| format!("{prefix} {s}")).collect(),
             None => sentences.to_vec(),
         };
-        let options = TranslationOptions::<String, String> { beam_size: beam, max_decoding_length: 512, ..Default::default() };
+        let options = decoding_options(sentences, beam, strict);
         let out = model.translate_batch(&inputs, &options, None).map_err(|e| TranslateError::Engine(e.to_string()))?;
         let strip = spec.prefix.is_some();
         Ok(out
             .into_iter()
             .map(|(text, _)| if strip { strip_language_tokens(&text) } else { text.trim().to_string() })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod decoding_tests {
+    use super::*;
+
+    #[test]
+    fn the_answer_length_follows_the_input_length() {
+        assert_eq!(max_decoding_for(&["hi".into()]), 48);
+        assert_eq!(max_decoding_for(&["hi how are you ? i m softwar devllper".into()]), 98);
+        assert_eq!(max_decoding_for(&["x".repeat(1000)]), 512);
+        assert_eq!(max_decoding_for(&["short".into(), "a considerably longer sentence than the first".into()]), 114);
+    }
+
+    #[test]
+    fn the_strict_pass_is_stricter_in_every_way() {
+        let inputs = vec!["hi how are you ? i m softwar devllper".to_string()];
+        let (normal, strict) = (decoding_options(&inputs, 2, false), decoding_options(&inputs, 4, true));
+        assert!(normal.repetition_penalty > 1.0 && strict.repetition_penalty > normal.repetition_penalty);
+        assert_eq!((normal.no_repeat_ngram_size, strict.no_repeat_ngram_size), (0, 3));
+        assert!(strict.max_decoding_length < normal.max_decoding_length && normal.max_decoding_length < 512);
+        assert!(strict.beam_size >= normal.beam_size);
     }
 }
 
@@ -361,6 +413,11 @@ impl Ct2Engine {
     /// Use this glossary for every translation from now on.
     pub fn set_glossary(&self, glossary: crate::Glossary) {
         self.router.set_glossary(glossary);
+    }
+
+    /// Glossary terms in one sentence, for Quality mode (see `Router::glossary_terms_in`).
+    pub fn glossary_terms_in(&self, from: &str, to: &str, sentence: &str) -> Vec<crate::TermForm> {
+        self.router.glossary_terms_in(from, to, sentence)
     }
 
     /// Threads per model (0 = automatic). Takes effect for the next translation.

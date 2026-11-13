@@ -38,3 +38,7 @@ When a shortcut seems to do nothing: set `DAWN_TRACE=1` (the app prints `hotkeys
 `DAWN_TRACE_KEYS=1` (every key event the hook delivers). No `[hotkeys] key` lines at all means the keys never reach the hook (another low-level hook, a remote
 session, a program running as administrator in front); key lines without `hotkey:` lines mean the sequence did not match (a modifier missing on the second press,
 the second press later than 400 ms).
+
+## Inside the app's own windows
+
+The hook is not enough where the app's own web views have the focus: a focused text box (or the web view's built-in browser shortcuts) can use a key before the app does. Apps therefore also match their shortcuts in the page and report them to the backend, which runs each key press once (`Quick::claim_fire` in Owl-L). The page-side router handles single and double presses with the same 400 ms window, leaves normal editing keys alone and ignores AltGr. See Owl-L's `docs/quick-access.md`.

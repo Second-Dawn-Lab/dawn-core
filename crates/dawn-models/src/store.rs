@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::catalog::{Catalog, Dictionary, Model};
+use crate::catalog::{Catalog, Dictionary, LlmPack, Model};
 use crate::download::download;
 use crate::error::{ModelError, Result};
 
@@ -226,13 +226,14 @@ impl ModelStore {
         self.install_archive(model, "model.bin", opts, on_step)
     }
 
-    /// The download, check and extraction both kinds of pack share; `required` is the file an archive of this kind must contain.
-    fn install_archive(&self, model: &Model, required: &str, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
+    /// Download `model` (trying every url in turn) and check its sha256. Returns the verified file and its checksum.
+    /// A partial file of the last url is kept for a resume; a file that fails the check is deleted.
+    fn fetch_verified(&self, model: &Model, ext: &str, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<(PathBuf, String)> {
         let unpublished = |u: &String| u.trim().is_empty() || u == "TBD";
         if model.urls.is_empty() || model.urls.iter().any(unpublished) || model.sha256.is_empty() || model.sha256 == "TBD" {
             return Err(ModelError::NotPublished(model.id.clone()));
         }
-        let part = self.root.join(".downloads").join(format!("{}.zip.part", model.id));
+        let part = self.root.join(".downloads").join(format!("{}.{ext}.part", model.id));
         let mut failure = None;
         let mut verified = None;
         for (i, url) in model.urls.iter().enumerate() {
@@ -259,9 +260,29 @@ impl ModelStore {
             let _ = fs::remove_file(&part);
             failure = Some(ModelError::Checksum { expected: model.sha256.clone(), actual });
         }
-        let Some(actual) = verified else {
-            return Err(failure.unwrap_or_else(|| ModelError::NotPublished(model.id.clone())));
-        };
+        match verified {
+            Some(actual) => Ok((part, actual)),
+            None => Err(failure.unwrap_or_else(|| ModelError::NotPublished(model.id.clone()))),
+        }
+    }
+
+    fn record_installed(&self, model: &Model, part: &Path, actual: String) -> Result<()> {
+        let _guard = INSTALLED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut file = self.read_installed();
+        file.version = 2;
+        file.models.retain(|m| m.id != model.id);
+        file.models.push(InstalledModel {
+            id: model.id.clone(),
+            size_bytes: fs::metadata(part).map(|m| m.len()).unwrap_or(model.size_bytes),
+            sha256: actual,
+            installed_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
+        });
+        self.write_installed(&file)
+    }
+
+    /// The download, check and extraction both kinds of pack share; `required` is the file an archive of this kind must contain.
+    fn install_archive(&self, model: &Model, required: &str, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
+        let (part, actual) = self.fetch_verified(model, "zip", opts, on_step)?;
 
         on_step(StepKind::Extracting);
         let tmp = self.root.join(format!(".tmp-{}", model.id));
@@ -278,19 +299,58 @@ impl ModelStore {
         }
         fs::rename(&tmp, &target)?;
 
-        let _guard = INSTALLED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut file = self.read_installed();
-        file.version = 2;
-        file.models.retain(|m| m.id != model.id);
-        file.models.push(InstalledModel {
-            id: model.id.clone(),
-            size_bytes: fs::metadata(&part).map(|m| m.len()).unwrap_or(model.size_bytes),
-            sha256: actual,
-            installed_at: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-        });
-        self.write_installed(&file)?;
+        self.record_installed(model, &part, actual)?;
         let _ = fs::remove_file(&part);
         Ok(())
+    }
+
+    /// The folder that holds Quality-mode packs (language models and the runtime that runs them): a store of its own.
+    pub fn llm_store(&self) -> ModelStore {
+        ModelStore::new(self.root.join("llm"))
+    }
+
+    /// Where an LLM pack lives on disk.
+    pub fn llm_dir(&self, id: &str) -> PathBuf {
+        self.llm_store().model_dir(id)
+    }
+
+    /// Listed as installed and its folder still exists (use [`ModelStore::llm_file`] to check the pack's own file).
+    pub fn is_llm_installed(&self, id: &str) -> bool {
+        let store = self.llm_store();
+        store.model_dir(id).is_dir() && store.read_installed().models.iter().any(|m| m.id == id)
+    }
+
+    /// The main file of an installed LLM pack (the GGUF, or the runtime's executable), if it is installed.
+    pub fn llm_file(&self, pack: &LlmPack) -> Option<PathBuf> {
+        let path = self.llm_dir(&pack.id).join(&pack.file);
+        (self.is_llm_installed(&pack.id) && path.is_file()).then_some(path)
+    }
+
+    /// Download, verify (sha256) and install an LLM pack. A model is one GGUF file; a runtime is a zip that is extracted
+    /// and must contain `pack.file`. Same download rules as [`ModelStore::install_model`].
+    pub fn install_llm(&self, pack: &LlmPack, opts: &InstallOptions, on_step: &mut dyn FnMut(StepKind)) -> Result<()> {
+        let store = self.llm_store();
+        if pack.is_runtime() {
+            return store.install_archive(&pack.as_model(), &pack.file, opts, on_step);
+        }
+        let model = pack.as_model();
+        let (part, actual) = store.fetch_verified(&model, "gguf", opts, on_step)?;
+        let tmp = store.root.join(format!(".tmp-{}", pack.id));
+        if tmp.exists() {
+            fs::remove_dir_all(&tmp)?;
+        }
+        fs::create_dir_all(&tmp)?;
+        fs::rename(&part, tmp.join(&pack.file))?;
+        let target = store.model_dir(&pack.id);
+        if target.exists() {
+            fs::remove_dir_all(&target)?;
+        }
+        fs::rename(&tmp, &target)?;
+        store.record_installed(&model, &target.join(&pack.file), actual)
+    }
+
+    pub fn remove_llm(&self, id: &str) -> Result<()> {
+        self.llm_store().remove_model_files(&[id.to_string()])
     }
 
     /// Install every missing model of a language. Progress is aggregated over what has to be
@@ -991,6 +1051,86 @@ mod tests {
         assert!(store.orphaned_models(&Catalog::default()).is_empty());
         store.remove_dictionary("de-en").unwrap();
         assert!(!store.is_dictionary_installed("de-en") && !store.dictionary_dir("de-en").exists());
+    }
+
+    fn llm_pack(id: &str, kind: &str, file: &str, archive: &Archive) -> LlmPack {
+        LlmPack {
+            id: id.into(),
+            kind: kind.into(),
+            name: id.into(),
+            tier: if kind == "llm" { "recommended".into() } else { String::new() },
+            file: file.into(),
+            urls: vec![file_url(&archive.0)],
+            size_bytes: archive.2,
+            sha256: archive.1.clone(),
+            license: "Apache-2.0".into(),
+            attribution: "test".into(),
+            source_url: String::new(),
+            ram_bytes: archive.2 * 2,
+            description: String::new(),
+            details: String::new(),
+            languages: vec![],
+        }
+    }
+
+    #[test]
+    fn an_llm_model_installs_as_one_verified_file_in_its_own_store_and_can_be_removed() {
+        let dir = temp_dir();
+        let store = ModelStore::new(dir.join("models"));
+        let gguf = dir.join("tiny.gguf");
+        fs::write(&gguf, b"GGUF fake weights").unwrap();
+        let archive: Archive = (gguf.clone(), sha256_file(&gguf).unwrap(), fs::metadata(&gguf).unwrap().len());
+        let pack = llm_pack("tiny", "llm", "tiny.gguf", &archive);
+        let cancel = AtomicBool::new(false);
+        assert!(store.llm_file(&pack).is_none());
+        let mut steps = Vec::new();
+        store.install_llm(&pack, &opts(&cancel), &mut |s| steps.push(format!("{s:?}"))).unwrap();
+        assert!(steps.iter().any(|s| s.starts_with("Verifying")), "{steps:?}");
+        let file = store.llm_file(&pack).expect("installed");
+        assert_eq!(fs::read(&file).unwrap(), b"GGUF fake weights");
+        assert!(store.is_llm_installed("tiny"));
+        // Language packs and dictionaries do not see it.
+        assert!(store.installed_models().is_empty() && !store.is_dictionary_installed("tiny"));
+        store.remove_llm("tiny").unwrap();
+        assert!(store.llm_file(&pack).is_none() && !store.llm_dir("tiny").exists());
+    }
+
+    #[test]
+    fn an_llm_runtime_is_a_zip_that_must_contain_its_executable() {
+        let dir = temp_dir();
+        let store = ModelStore::new(dir.join("models"));
+        let path = dir.join("runtime.zip");
+        let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("llama-server.exe", options).unwrap();
+        zip.write_all(b"MZ").unwrap();
+        zip.start_file("ggml.dll", options).unwrap();
+        zip.write_all(b"dll").unwrap();
+        zip.finish().unwrap();
+        let archive: Archive = (path.clone(), sha256_file(&path).unwrap(), fs::metadata(&path).unwrap().len());
+        let pack = llm_pack("runtime", "llm-runtime", "llama-server.exe", &archive);
+        let cancel = AtomicBool::new(false);
+        store.install_llm(&pack, &opts(&cancel), &mut |_| {}).unwrap();
+        assert!(store.llm_file(&pack).unwrap().ends_with("llama-server.exe"));
+        assert!(store.llm_dir("runtime").join("ggml.dll").exists());
+        // A runtime without its executable is refused and leaves nothing behind.
+        let wrong = llm_pack("runtime2", "llm-runtime", "llama-cli.exe", &archive);
+        assert_eq!(store.install_llm(&wrong, &opts(&cancel), &mut |_| {}).unwrap_err().code(), "invalid_archive");
+        assert!(!store.is_llm_installed("runtime2"));
+    }
+
+    #[test]
+    fn an_llm_pack_with_a_wrong_checksum_is_refused_and_leaves_nothing_behind() {
+        let dir = temp_dir();
+        let store = ModelStore::new(dir.join("models"));
+        let gguf = dir.join("tiny.gguf");
+        fs::write(&gguf, b"GGUF fake weights").unwrap();
+        let archive: Archive = (gguf.clone(), "0".repeat(64), 17);
+        let pack = llm_pack("tiny", "llm", "tiny.gguf", &archive);
+        let cancel = AtomicBool::new(false);
+        let err = store.install_llm(&pack, &opts(&cancel), &mut |_| {}).unwrap_err();
+        assert_eq!(err.code(), "checksum");
+        assert!(!store.is_llm_installed("tiny") && !store.llm_dir("tiny").exists());
     }
 
     #[test]

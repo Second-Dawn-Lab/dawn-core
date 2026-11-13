@@ -10,6 +10,8 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 dawn-models = { path = "../dawn-models" }
+# The degeneration detector (repetition loops in model output), shared with dawn-llm.
+dawn-core = { path = "../dawn-core" }
 # CPU-only CTranslate2. `sentencepiece` is the tokenizer Marian/Opus-MT models need.
 ct2rs = { version = "0.10", default-features = false, features = ["sentencepiece"] }
 # Encodes the translated prefix with the model's target vocabulary (word alternatives). Same crate and

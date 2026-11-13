@@ -19,6 +19,77 @@ pub struct Catalog {
     /// Offline dictionaries (packs of type "dictionary"): one pack per language pair, both directions inside.
     #[serde(default)]
     pub dictionaries: Vec<Dictionary>,
+    /// Quality-mode packs (packs of type "llm" and "llm-runtime"): language models and the runtime that runs them.
+    #[serde(default)]
+    pub llms: Vec<LlmPack>,
+}
+
+/// A Quality-mode pack. `"type": "llm"` is a quantized language model (one GGUF file); `"type": "llm-runtime"` is the
+/// program that runs it (a zip with `llama-server`). Downloaded and verified like a language pack, but kept in a store of
+/// its own (`llm/`), so removing a language never touches it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmPack {
+    pub id: String,
+    /// `"llm"` or `"llm-runtime"`.
+    #[serde(rename = "type", default = "default_llm_type")]
+    pub kind: String,
+    pub name: String,
+    /// `recommended`, `alternative` or `writing` for models, empty for a runtime.
+    #[serde(default)]
+    pub tier: String,
+    /// The GGUF file name inside the pack, or the runtime's executable (`llama-server.exe`).
+    pub file: String,
+    pub urls: Vec<String>,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub license: String,
+    pub attribution: String,
+    #[serde(default)]
+    pub source_url: String,
+    /// Memory the loaded model needs, in bytes (file size plus the context buffers); 0 for a runtime.
+    #[serde(default)]
+    pub ram_bytes: u64,
+    /// Short description for the settings page.
+    #[serde(default)]
+    pub description: String,
+    /// More text for an expandable "More" part of the settings page.
+    #[serde(default)]
+    pub details: String,
+    /// The languages the model is good enough in to polish or rewrite; empty = every language Owl-L offers.
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+fn default_llm_type() -> String {
+    "llm".into()
+}
+
+impl LlmPack {
+    pub fn is_runtime(&self) -> bool {
+        self.kind == "llm-runtime"
+    }
+
+    /// Is the model used for `lang`? A model that writes garbage in a language must not be asked to polish it.
+    pub fn covers(&self, lang: &str) -> bool {
+        self.languages.is_empty() || self.languages.iter().any(|l| l == lang)
+    }
+
+    /// The pack as a downloadable archive, for the shared download and install code.
+    pub fn as_model(&self) -> Model {
+        Model {
+            id: self.id.clone(),
+            sources: vec![],
+            targets: vec![],
+            urls: self.urls.clone(),
+            size_bytes: self.size_bytes,
+            sha256: self.sha256.clone(),
+            license: self.license.clone(),
+            attribution: self.attribution.clone(),
+            prefix: None,
+            target_tokens: BTreeMap::new(),
+        }
+    }
 }
 
 /// A dictionary pack for a language pair. Downloaded, verified and extracted like a model, but kept apart from the
@@ -123,7 +194,7 @@ impl Model {
 
 impl Default for Catalog {
     fn default() -> Self {
-        Self { version: 2, hub: "en".into(), models: vec![], languages: vec![], dictionaries: vec![] }
+        Self { version: 2, hub: "en".into(), models: vec![], languages: vec![], dictionaries: vec![], llms: vec![] }
     }
 }
 
@@ -148,6 +219,25 @@ impl Catalog {
     /// The dictionary that has both languages (in either order).
     pub fn dictionary_for(&self, a: &str, b: &str) -> Option<&Dictionary> {
         self.dictionaries.iter().find(|d| d.covers(a, b))
+    }
+
+    pub fn llm(&self, id: &str) -> Option<&LlmPack> {
+        self.llms.iter().find(|l| l.id == id)
+    }
+
+    /// The language models of the catalog (without the runtime).
+    pub fn llm_models(&self) -> Vec<&LlmPack> {
+        self.llms.iter().filter(|l| !l.is_runtime()).collect()
+    }
+
+    /// The model the Write tab prefers (tier `writing`).
+    pub fn llm_writing(&self) -> Option<&LlmPack> {
+        self.llms.iter().find(|l| l.tier == "writing")
+    }
+
+    /// The program that runs the models, if the catalog lists one.
+    pub fn llm_runtime(&self) -> Option<&LlmPack> {
+        self.llms.iter().find(|l| l.is_runtime())
     }
 
     pub fn model(&self, id: &str) -> Option<&Model> {
@@ -290,6 +380,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Quality mode packs: pinned, checksummed, and only licenses we may redistribute (no non-commercial or
+    /// custom-restricted terms: no Llama community license, no Gemma terms, nothing CC-BY-NC).
+    #[test]
+    fn bundled_llm_packs_are_pinned_checksummed_and_permissively_licensed() {
+        let catalog = Catalog::bundled();
+        assert!(catalog.llm_runtime().is_some(), "the runtime is listed");
+        assert!(!catalog.llm_models().is_empty(), "at least one model is listed");
+        assert!(catalog.llm_models().iter().any(|p| p.tier == "recommended"), "a recommended model is the default");
+        assert_eq!(catalog.llm_models().iter().filter(|p| p.tier == "writing").count(), 1, "one writing model");
+        for p in &catalog.llms {
+            assert!(["MIT", "Apache-2.0"].contains(&p.license.as_str()), "{}: license {}", p.id, p.license);
+            assert_eq!(p.sha256.len(), 64, "{}", p.id);
+            assert!(p.size_bytes > 0 && !p.file.is_empty() && !p.attribution.is_empty(), "{}", p.id);
+            assert!(p.kind == "llm" || p.kind == "llm-runtime", "{}", p.id);
+            if !p.is_runtime() {
+                assert!(p.file.ends_with(".gguf") && p.ram_bytes > p.size_bytes, "{}: a model needs more memory than its file", p.id);
+            }
+            for url in &p.urls {
+                assert!(url.starts_with("https://"), "{}: {url}", p.id);
+                assert!(!url.contains("/resolve/main/") && !url.contains("/releases/latest/"), "{}: {url} is not pinned", p.id);
+                if let Some(rest) = url.strip_prefix("https://huggingface.co/") {
+                    let commit = rest.split("/resolve/").nth(1).and_then(|r| r.split('/').next()).unwrap_or("");
+                    assert!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "{}: {url} lacks a commit hash", p.id);
+                    // A model is the file itself; the runtime is the zip that holds its executable.
+                    let name = if p.is_runtime() { ".zip" } else { p.file.as_str() };
+                    assert!(url.ends_with(name), "{}: {url} names another file", p.id);
+                }
+            }
+        }
+        // Every pack is mirrored first (pinned to a commit of our own repository) with the original as the fallback.
+        for p in &catalog.llms {
+            assert_eq!(p.urls.len(), 2, "{}", p.id);
+            assert!(p.urls[0].starts_with("https://huggingface.co/Second-Dawn-Lab/owll-quality-packs/resolve/"), "{}: mirror first", p.id);
+            assert!(!p.urls[1].contains("Second-Dawn-Lab"), "{}: the original is the fallback", p.id);
+        }
+        // A model that writes garbage in a language is not asked to polish it (Phi-4 mini and Urdu).
+        let phi = catalog.llm("phi-4-mini-q4km").expect("the Phi-4 mini entry");
+        assert!(phi.covers("de") && phi.covers("ja") && !phi.covers("ur") && !phi.covers("hi") && !phi.covers("ar"));
+        assert!(catalog.llm("hy-mt2-1.8b-q4km").unwrap().covers("ur"), "an empty list means every language");
+        // Language models never appear among the translation models.
+        assert!(catalog.model("hy-mt2-1.8b-q4km").is_none());
     }
 
     #[test]

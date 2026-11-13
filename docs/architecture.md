@@ -26,8 +26,9 @@ Apps (Tauri 2 + React + TypeScript + Vite) live in their own repositories. Apps 
 | Crate | Role |
 |---|---|
 | `dawn-core` | Paths (`%AppData%/SecondDawn`), atomic JSON read/write |
-| `dawn-models` | Language catalog, resumable downloads, checksum verification, the shared model store. **The only shared code allowed to use the network** (pack downloads). The one other network use is an app's own update check, e.g. Owl-L asking `latest.json` on its GitHub release at most once a day |
+| `dawn-models` | Language catalog, resumable downloads, checksum verification, the shared model store. **The only shared code allowed to use the internet** (pack downloads, which include the Quality mode runtime and models). The one other internet use is an app's own update check, e.g. Owl-L asking `latest.json` on its GitHub release at most once a day. `dawn-llm` opens connections too, but only to `127.0.0.1` (its own `llama-server` or a local Ollama) |
 | `dawn-translate` | `TranslationEngine` trait; `Ct2Engine` (CTranslate2 via `ct2rs`, oneDNN backend), the hub-and-pivot router with streaming batches and a per-sentence cache, language-aware sentence splitting, language detection (`whatlang`), the glossary ([glossary.md](glossary.md)), word alternatives ([alternatives.md](alternatives.md)), plus a `StubEngine` for tests |
+| `dawn-llm` | Quality mode: an optional local language model (a `llama-server` sidecar or a local Ollama) behind one trait, fixed prompts per task (polish, tone, glossary, write, alternatives), output checks, the Write diff, memory checks and idle unload (see [quality-mode.md](quality-mode.md)). Talks to `127.0.0.1` only |
 | `dawn-docs` | Document translation: Word, PowerPoint, Excel, text, Markdown and PDF files read into text units and written back with only the text changed (see [documents.md](documents.md)). Independent of any engine |
 | `dawn-ocr` | OCR engines behind one trait (Windows OCR first), small-text scales and conservative repairs of OCR slips |
 | `dawn-capture` | Screen capture and area-selection coordinate mapping |

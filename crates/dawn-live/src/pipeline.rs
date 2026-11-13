@@ -3,6 +3,7 @@
 
 use crate::change::{is_black, signature, BlackEvent, BlackWatch, ChangeDetector};
 use crate::lines::{split_lines, Delta, LineTracker};
+use crate::meeting::{parse_meeting, MeetingTracker, MeetingUpdate};
 use crate::stable::{Stabilizer, Verdict};
 
 /// What one look produced.
@@ -18,6 +19,30 @@ pub struct Step {
     pub delta: Delta,
     /// How long nothing changed in the region, for the update rate.
     pub idle_ms: u64,
+    /// Meeting captions: the utterances that changed (translate them at once, the text is still growing), or ended.
+    pub updates: Vec<MeetingUpdate>,
+}
+
+/// Whether the region holds meeting captions (a speaker name above the text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeetingMode {
+    /// Never: every region is plain subtitles.
+    Off,
+    /// The first speaker name that is read switches the region to meeting captions.
+    #[default]
+    Auto,
+    /// Always: the text is followed word by word, with or without speaker names.
+    On,
+}
+
+impl MeetingMode {
+    pub fn parse(text: &str) -> Self {
+        match text {
+            "off" => Self::Off,
+            "on" => Self::On,
+            _ => Self::Auto,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -29,6 +54,10 @@ pub struct Pipeline {
     text_seen: bool,
     last_text: String,
     last_change_ms: u64,
+    meeting: MeetingTracker,
+    mode: MeetingMode,
+    /// A speaker name was read: this region shows meeting captions.
+    meeting_active: bool,
 }
 
 impl Pipeline {
@@ -41,7 +70,18 @@ impl Pipeline {
         self.change.reset();
         self.stabilizer.reset();
         self.tracker.reset();
+        self.meeting.reset();
+        self.meeting_active = false;
         self.last_text.clear();
+    }
+
+    pub fn set_meeting_mode(&mut self, mode: MeetingMode) {
+        self.mode = mode;
+    }
+
+    /// The captions are followed as a meeting (speaker names, word by word).
+    pub fn meeting_active(&self) -> bool {
+        self.mode == MeetingMode::On || (self.mode == MeetingMode::Auto && self.meeting_active)
     }
 
     /// Forget only the pixels (after a pause): the next frame is read even if it looks like the last one.
@@ -70,6 +110,24 @@ impl Pipeline {
         }
         // A frame that did not change is the same text again: that is how a caption becomes stable without reading it twice.
         let mut step = Step { black, read: did_read, idle_ms: now_ms.saturating_sub(self.last_change_ms), ..Default::default() };
+        if self.mode != MeetingMode::Off && did_read {
+            // The first speaker name read in the region switches it to meeting captions (until the region is reset).
+            if parse_meeting(&split_lines(&self.last_text)).iter().any(|b| b.speaker.is_some()) {
+                self.meeting_active = true;
+            }
+        }
+        if self.meeting_active() {
+            // No waiting for the text to settle: every change of a growing line is passed on at once.
+            let text = self.last_text.trim().to_string();
+            if text.is_empty() {
+                step.updates = self.meeting.push_empty(now_ms);
+                step.cleared = !step.updates.is_empty();
+            } else {
+                step.updates = self.meeting.push(now_ms, &parse_meeting(&split_lines(&text)));
+            }
+            step.updates.extend(self.meeting.tick(now_ms));
+            return step;
+        }
         match self.stabilizer.observe(now_ms, &self.last_text) {
             Verdict::Stable(text) => step.delta = self.tracker.push(&split_lines(&text)),
             Verdict::Cleared => {
@@ -198,5 +256,70 @@ mod tests {
         pipeline.reset();
         let step = pipeline.step(500, &rgba, W, H, &mut || Some("Hello there".into()));
         assert!(step.read);
+    }
+
+    // --- meeting captions ---
+
+    fn meeting_play(mode: MeetingMode, sequence: &[(usize, &str)], every_ms: u64) -> Vec<(u64, Vec<MeetingUpdate>)> {
+        let mut pipeline = Pipeline::new();
+        pipeline.set_meeting_mode(mode);
+        sequence
+            .iter()
+            .enumerate()
+            .map(|(i, (picture, text))| {
+                let now = i as u64 * every_ms;
+                let step = pipeline.step(now, &frame(*picture), W, H, &mut || Some(text.to_string()));
+                (now, step.updates)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_growing_meeting_caption_is_passed_on_at_every_change_without_waiting_for_a_second_read() {
+        let seq = [(1, "AK
+Anna Keller
+We should"), (2, "AK
+Anna Keller
+We should look at"), (3, "AK
+Anna Keller
+We should look at the numbers.")];
+        let out = meeting_play(MeetingMode::Auto, &seq, 500);
+        // The very first read already gives the text (plain subtitles would wait for a second, equal read).
+        assert_eq!(out[0].1.len(), 1);
+        assert_eq!((out[0].1[0].speaker.as_deref(), out[0].1[0].text.as_str()), (Some("Anna Keller"), "We should"));
+        assert_eq!(out[1].1[0].text, "We should look at");
+        assert_eq!(out[2].1[0].text, "We should look at the numbers.");
+        assert!(out.iter().all(|(_, u)| u.iter().all(|x| x.id == 1 && !x.finished)));
+    }
+
+    #[test]
+    fn the_utterance_ends_after_a_pause_without_reading_again() {
+        let seq = [(1, "AK
+Anna Keller
+Yes."), (1, "x"), (1, "x"), (1, "x"), (1, "x")];
+        let out = meeting_play(MeetingMode::Auto, &seq, 500);
+        let finished: Vec<u64> = out.iter().filter(|(_, u)| u.iter().any(|x| x.finished)).map(|(t, _)| *t).collect();
+        assert_eq!(finished, [2000], "1800 ms after the last change, at the next look");
+    }
+
+    #[test]
+    fn plain_subtitles_are_not_taken_for_a_meeting_in_auto_mode_and_off_never_is() {
+        let seq = [(1, "We will begin with
+the quarterly report."), (1, "x"), (1, "x")];
+        assert!(meeting_play(MeetingMode::Auto, &seq, 400).iter().all(|(_, u)| u.is_empty()));
+        let named = [(1, "AK
+Anna Keller
+We start now.")];
+        assert!(meeting_play(MeetingMode::Off, &named, 400).iter().all(|(_, u)| u.is_empty()));
+        assert_eq!(meeting_play(MeetingMode::On, &seq[..1], 400)[0].1.len(), 1, "On follows any text word by word");
+    }
+
+    #[test]
+    fn meeting_captions_that_go_away_end_the_utterance() {
+        let seq = [(1, "AK
+Anna Keller
+That is all."), (0, ""), (0, ""), (0, "")];
+        let out = meeting_play(MeetingMode::Auto, &seq, 500);
+        assert!(out[2].1.iter().any(|u| u.finished), "{out:?}");
     }
 }

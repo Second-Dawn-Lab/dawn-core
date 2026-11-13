@@ -694,5 +694,100 @@
       "beta": true,
       "entries": 194926
     }
+  ],
+  "llms": [
+    {
+      "id": "llama-cpp-b12018-win-x64-cpu",
+      "type": "llm-runtime",
+      "name": "llama.cpp runtime (CPU, Windows x64)",
+      "file": "llama-server.exe",
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-quality-packs/resolve/8003faa2d289c53c9bafaf6794273c923e7e3d06/llama-b12018-bin-win-cpu-x64.zip",
+        "https://github.com/ggml-org/llama.cpp/releases/download/b12018/llama-b12018-bin-win-cpu-x64.zip"
+      ],
+      "sizeBytes": 24574711,
+      "sha256": "205755a92c77f187886a77854c8a7fd018ad8bbe17e4a8d128a032f1aaacb9a6",
+      "license": "MIT",
+      "attribution": "Georgi Gerganov and the ggml-org / llama.cpp contributors (MIT)",
+      "sourceUrl": "https://github.com/ggml-org/llama.cpp",
+      "description": "The small program that runs the language model on your processor.",
+      "details": "llama.cpp (MIT license) runs the models on your processor. It is downloaded together with the first model."
+    },
+    {
+      "id": "hy-mt2-1.8b-q4km",
+      "type": "llm",
+      "name": "Hy-MT2 1.8B",
+      "tier": "recommended",
+      "file": "Hy-MT2-1.8B-Q4_K_M.gguf",
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-quality-packs/resolve/8003faa2d289c53c9bafaf6794273c923e7e3d06/Hy-MT2-1.8B-Q4_K_M.gguf",
+        "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/a0c709d9fac510f2c807aa3af52872340dc37a4a/Hy-MT2-1.8B-Q4_K_M.gguf"
+      ],
+      "sizeBytes": 1133080448,
+      "sha256": "dc5f44fcf1fa496ee7ad725982c0c8c553a4de00259b53af84c4b89fb0c06699",
+      "license": "Apache-2.0",
+      "attribution": "Tencent Hy team (Hy-MT2-1.8B, Apache-2.0)",
+      "sourceUrl": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF",
+      "ramBytes": 2300000000,
+      "description": "Translation model for 33 languages. Fast; used for polishing translations.",
+      "details": "Made for translation in 33 languages including German, French, Spanish, Italian, Russian, Chinese, Japanese, Arabic, Turkish, Urdu and Hindi. In our tests it read naturally in all of them. It is conservative when fixing grammar, which is why the Write tab prefers the writing model."
+    },
+    {
+      "id": "index-translate-2b-q4km",
+      "type": "llm",
+      "name": "Index-Translate 2B",
+      "tier": "alternative",
+      "file": "Index-Translate-2B.Q4_K_M.gguf",
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-quality-packs/resolve/8003faa2d289c53c9bafaf6794273c923e7e3d06/Index-Translate-2B.Q4_K_M.gguf",
+        "https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF/resolve/3a0eca6ce931d88d00614d427ab3ed8ff0743902/Index-Translate-2B.Q4_K_M.gguf"
+      ],
+      "sizeBytes": 1312164352,
+      "sha256": "044b313d29342bd3b2c77cbb64023ca0d209bd9b3247763f9d162767ef2d746a",
+      "license": "Apache-2.0",
+      "attribution": "IndexTeam, bilibili (Index-Translate-2B, Apache-2.0)",
+      "sourceUrl": "https://huggingface.co/IndexTeam/Index-Translate-2B-GGUF",
+      "ramBytes": 2500000000,
+      "description": "A second translation model of a similar size; try it if the recommended one stumbles on your texts.",
+      "details": "Sometimes better than the recommended model (formal address in Spanish and Italian, some nouns), sometimes worse (Japanese, Hindi). Similar speed and memory."
+    },
+    {
+      "id": "phi-4-mini-q4km",
+      "type": "llm",
+      "name": "Phi-4 mini",
+      "tier": "writing",
+      "file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+      "urls": [
+        "https://huggingface.co/Second-Dawn-Lab/owll-quality-packs/resolve/8003faa2d289c53c9bafaf6794273c923e7e3d06/Phi-4-mini-instruct-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF/resolve/78eb92a46fc37e6b524df991ed9aca9bc6aa7b80/Phi-4-mini-instruct-Q4_K_M.gguf"
+      ],
+      "sizeBytes": 2491874272,
+      "sha256": "88c00229914083cd112853aab84ed51b87bdf6b9ce42f532d8c85c7c63b1730a",
+      "license": "MIT",
+      "attribution": "Microsoft (Phi-4-mini-instruct, MIT), GGUF by Unsloth",
+      "sourceUrl": "https://huggingface.co/unsloth/Phi-4-mini-instruct-GGUF",
+      "ramBytes": 4600000000,
+      "languages": [
+        "en",
+        "de",
+        "fr",
+        "es",
+        "it",
+        "pt",
+        "nl",
+        "pl",
+        "ru",
+        "uk",
+        "cs",
+        "sv",
+        "da",
+        "fi",
+        "zh",
+        "ja",
+        "ko"
+      ],
+      "description": "Used by the Write tab. Good in European languages, Chinese and Japanese; not used for Arabic, Turkish, Urdu or Hindi.",
+      "details": "A general model of 3.8 billion parameters. It fixes grammar and changes the register of a text better than the translation models, but it writes poorly in Arabic, Turkish, Urdu and Hindi, so Owl-L does not use it for those languages. Slower, and it needs about 4.6 GB of memory."
+    }
   ]
 }

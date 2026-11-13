@@ -1,0 +1,22 @@
+[package]
+name = "dawn-llm"
+description = "Second Dawn Quality mode: a local language model (llama.cpp sidecar or Ollama) behind one trait, with fixed prompts and output checks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+# The degeneration detector (repetition loops), shared with dawn-translate.
+dawn-core = { path = "../dawn-core" }
+# Talks to 127.0.0.1 only (the local llama-server, or Ollama). Already compiled for dawn-models; no TLS needed here.
+ureq = { version = "2", default-features = false, features = ["json"] }
+# Language check of the model's answer; already used by dawn-translate.
+whatlang = "0.16"
+
+# Free memory before a model is loaded (GlobalMemoryStatusEx), and a job object so the runtime never outlives the app.
+# Same bindings dawn-hotkeys uses.
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_Security"]

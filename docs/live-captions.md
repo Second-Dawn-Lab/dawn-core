@@ -91,3 +91,31 @@ interval stretches to three times the read duration when OCR is slower.
 * Speech-to-text (translating audio) is out of scope; it would be a separate engine behind the same bar.
 * A region that was moved on screen (the video window moved) has to be drawn again ("Change region").
 * Exclusive-fullscreen games and DRM video are not capturable; the black-region message says so for the latter.
+
+## Meeting captions (Teams, Zoom, Meet) (`dawn-live::meeting`)
+
+The caption area of a meeting app is not subtitles: an avatar with initials, a speaker name, then one or two lines of text that keep growing while the person speaks, and for
+every speaker change another block below. Waiting for two equal reads (the plain-subtitle rule) makes the translation lag by a second or more, and the name would be translated as a word.
+The pipeline therefore has a second mode, `MeetingMode` (setting `liveMeeting`: automatic, always, never). In automatic mode the first speaker name that is read switches the region to meeting captions.
+
+* **Layout** (`parse_meeting`): the recognized lines are split into one block per speaker. Initials are dropped (on a line of their own, in front of the name, or in front of the first text line; only when they are the initials of that speaker, so "IT will be ready" stays). A speaker line is two to four capitalized words (particles such as "van" and hyphens allowed), no end punctuation, no digits, or a label such as "Speaker 1" / "Sprecher 2"; words that start sentences ("Good morning", "Thank you") are not names. The name is a label: it is never part of the translated text.
+* **Following** (`MeetingTracker`): every utterance has an id. Each read updates the text of the last block (the one being spoken); a changed text is reported at once, so the translation of the growing line is shown right away and replaced as it grows. When the caption box scrolls (its first words leave) the utterance keeps all its words, found by the overlap of the old end and the new start; a cut-off last word is completed; an OCR slip in a word or the name does not start a new utterance. Blocks above the live one, and utterances of another speaker, are finished; so is an utterance that did not change for 1.8 s. Two empty reads in a row end everything, so the same words later are new.
+* **Translation and polish** (`live.rs`): the whole utterance is translated at each change (the engine's sentence cache makes earlier sentences free, so only the growing one costs time). A finished utterance is polished in the background when "Polish live captions too" is on and the model is loaded and answers within 8 s; the polished text replaces the fast one (same id) and the first polish only loads the model.
+* **The bar**: lines are keyed by utterance id, show the speaker as a label, grow in place, and the transcript, the copy and the saved session contain "Name: text".
+
+Measured delay from a change of the caption to its translation (the loop of `run` played on a virtual clock with the real OCR and the German model; looks every 250 / 500 / 800 ms, one change every 450 ms in the synthetic test, one every 600 ms in the local recording test; caption translations with the cache warm):
+
+| Speed | synthetic captions (made-up name, a word every 450 ms) | a real recording (70 frames, local test) |
+|---|---|---|
+| Fast | mean 0.31 s, worst 0.52 s | mean 0.28 s, 90% 0.39 s, worst 0.45 s |
+| Normal | mean 0.54 s, worst 1.14 s | mean 0.45 s, 90% 0.64 s, worst 0.77 s |
+| Calm | mean 0.48 s, worst 0.99 s | mean 0.41 s, 90% 0.69 s, worst 0.79 s |
+
+Reading a frame took 88 ms and translating a growing line 60 to 100 ms on the test machine. In the real recording the speaker name was read in every frame and 17 utterances were found, all with a speaker label. The synthetic test is `cargo test -p owll meeting_delay -- --ignored --nocapture`. The real-recording test (`src-tauri/src/live_local_test.rs`) is **local only**: the file is git-ignored, it is only built when it exists, it reads frames from a folder named by `OWLL_LIVE_FRAMES` (frames are saved from the recording with a local script, outside every repository) and it prints numbers only, never names or sentences. Nothing of the recording, its frames, its OCR text or transcripts is in a repository, a fixture, a document or a commit message.
+
+Not covered: meeting captions are already speech recognition and contain its errors; translating the audio directly (a local Whisper model) would be a separate, later feature and is out of scope here.
+
+### Second round (meeting captions)
+
+* **The main window comes back.** When the main window was open and stepped aside for the region selection, closing the caption bar (its button, Esc, the shortcut, or the answer to "Save?") brings it back to the front (`live::close_bar`, `should_restore_main`). A main window that was already closed to the tray stays there. Changing the region does not forget that the window stepped aside.
+* **Speech-recognition errors.** A finished utterance is polished from its source text with the "intended meaning" prompt (see `quality-mode.md`): the model is told that the text may contain missing, wrong or run-together words and translates what was meant, without adding information. The fast translation shown while the speaker talks is a plain machine translation of what was read; a sentence it could not translate cleanly (a loop) is shown up to the loop, or as the source, and the polish does not start from it.

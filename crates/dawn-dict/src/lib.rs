@@ -8,5 +8,7 @@ pub mod kaikki;
 pub mod lookup;
 
 pub use entry::{Entry, Example, Sense, Word};
+mod spell;
 pub use format::{normalize, Dict, DictError, Writer};
 pub use lookup::{clean_word, Hit, Lookup, Match};
+pub use spell::{apply_fixes, spell_fixes, Fix};

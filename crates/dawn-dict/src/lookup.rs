@@ -35,7 +35,7 @@ pub fn clean_word(word: &str) -> &str {
 }
 
 /// Edit distance, giving up above `limit` (returns `limit + 1`).
-fn distance(a: &[char], b: &[char], limit: usize) -> usize {
+pub(crate) fn distance(a: &[char], b: &[char], limit: usize) -> usize {
     if a.len().abs_diff(b.len()) > limit {
         return limit + 1;
     }

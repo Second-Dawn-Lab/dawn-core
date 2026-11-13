@@ -8,10 +8,12 @@
 //!    timeout passes), so the caption bar does not flicker.
 //! 3. [`lines`]: of the stable text only what is new is translated; scrolling captions and repeated lines are handled.
 //! 4. [`rate`]: how long to wait for the next grab (calmer when nothing changes, on battery, or when OCR is slow).
+//! 4b. [`meeting`]: Teams, Zoom and Meet captions (a speaker name above growing text) are followed word by word instead.
 //! 5. [`place`]: where the caption bar goes, on any monitor, kept on screen.
 
 pub mod change;
 pub mod lines;
+pub mod meeting;
 pub mod pipeline;
 pub mod place;
 pub mod rate;
@@ -19,7 +21,8 @@ pub mod stable;
 
 pub use change::{is_black, signature, BlackEvent, BlackWatch, ChangeDetector, Signature};
 pub use lines::{group_sentences, split_lines, Delta, LineTracker};
-pub use pipeline::{Pipeline, Step};
+pub use meeting::{parse_meeting, parse_meeting_text, Block, MeetingTracker, MeetingUpdate};
+pub use pipeline::{MeetingMode, Pipeline, Step};
 pub use place::{physical, place_bar, place_popup, Rect};
 pub use rate::{interval_ms, Speed};
 pub use stable::{nearly_same, similarity, Stabilizer, Verdict};

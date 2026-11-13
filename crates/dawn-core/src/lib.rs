@@ -1,5 +1,8 @@
 //! Shared paths, configuration and logging for all Second Dawn apps.
 
+pub mod degenerate;
+pub mod normalize;
+
 use std::path::{Path, PathBuf};
 use std::{env, fs, io};
 

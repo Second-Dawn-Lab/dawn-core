@@ -51,13 +51,21 @@ Measured articles over five sentences per term (placeholder vs. inline vs. the m
 Sentences without a term are translated exactly as before. The finished translation reports how many terms were put
 in (`glossary_hits`); the Text tab shows a small "Glossary applied" marker.
 
+## With Quality mode
+
+Quality mode ([quality-mode.md](quality-mode.md)) fixes the two limits below that a translation model cannot fix. After the fast translation, a local language
+model rewrites each sentence and is told the glossary terms of that sentence, also in their **inflected source forms** (`find_forms`: "owls" for the entry "owl",
+up to three added letters, longest entry first). It must use the target term and inflect it for number, case, gender and article: "owl → Eule" gives
+"Die **Eulen** schlafen tagsüber." for "The owls sleep during the day." The answer is checked: every target term (as written, or without its last letter, so "Eulen" counts) must be in it;
+if not, the answer is thrown away and the result of the plain algorithm above stays. Without Quality mode nothing changes.
+
 ## Limits (honest ones)
 
 * **Grammar around the term can be wrong.** The target term is inserted as written. It is not declined, pluralized or
   re-cased, and the model may choose an article for a different gender ("Das Eule" for "die Eule"). The `inline` form
   is right for words the model knows; unknown words (rare nouns, new names) often get the wrong article. This is
   inherent to forcing a word into a model that has no such feature.
-* **Inflected source forms do not match.** "owls" is not "owl" with *whole word* on. With it off, "owls" matches but
+* **Inflected source forms do not match** (the plain engine; Quality mode matches them, see above). "owls" is not "owl" with *whole word* on. With it off, "owls" matches but
   the target is inserted unchanged ("Eule" instead of "Eulen"). Add the plural as its own entry.
 * **Multi-word terms** work, and the longest match wins ("snowy owl" before "owl").
 * **A term inside a longer proper name** is handled as the term.
