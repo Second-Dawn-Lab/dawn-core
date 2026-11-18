@@ -7,6 +7,14 @@
       "status": "in-development",
       "repo": "https://github.com/Second-Dawn-Lab/owll",
       "license": "MIT"
+    },
+    {
+      "id": "snipmunk",
+      "name": "Snipmunk",
+      "description": "Screenshot clipboard: collect screenshots, annotate them and paste them all at once.",
+      "status": "in-development",
+      "repo": "https://github.com/Second-Dawn-Lab/snipmunk",
+      "license": "MIT"
     }
   ]
 }
