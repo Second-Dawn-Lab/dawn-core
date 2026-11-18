@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.6.0...v0.7.0) (2026-11-18)
+
+
+### Features
+
+* **hotkeys:** support PrintScreen and navigation keys ([2c30881](https://github.com/Second-Dawn-Lab/dawn-core/commit/2c308817c363c9402a26987fb779192c3a3ef290))
+
 ## [0.6.0](https://github.com/Second-Dawn-Lab/dawn-core/compare/v0.5.0...v0.6.0) (2026-11-13)
 
 
