@@ -3,16 +3,48 @@
 use std::fmt;
 use std::str::FromStr;
 
-/// The keys a shortcut can use: letters, digits, F1-F12 and Space (Windows virtual-key codes).
+/// Keys with a name that is not a single character, as (text, virtual-key code). The first text of a code is how it is shown.
+const NAMED_KEYS: &[(&str, u32)] = &[
+    ("PrintScreen", 0x2C),
+    ("Pause", 0x13),
+    ("Insert", 0x2D),
+    ("Delete", 0x2E),
+    ("Home", 0x24),
+    ("End", 0x23),
+    ("PageUp", 0x21),
+    ("PageDown", 0x22),
+];
+
+/// Other spellings accepted when parsing.
+const KEY_ALIASES: &[(&str, u32)] = &[
+    ("PRTSCN", 0x2C),
+    ("PRTSC", 0x2C),
+    ("PRINT", 0x2C),
+    ("PRINTSCR", 0x2C),
+    ("SNAPSHOT", 0x2C),
+    ("INS", 0x2D),
+    ("DEL", 0x2E),
+    ("PGUP", 0x21),
+    ("PGDN", 0x22),
+];
+
+/// The keys a shortcut can use: letters, digits, F1-F12, Space, PrintScreen and a few navigation keys (Windows virtual-key codes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Key(pub u32);
 
 impl Key {
     pub fn name(self) -> String {
         match self.0 {
-            0x41..=0x5A | 0x30..=0x39 => char::from_u32(self.0).map(String::from).unwrap_or_default(),
+            0x41..=0x5A | 0x30..=0x39 => {
+                char::from_u32(self.0).map(String::from).unwrap_or_default()
+            }
             0x70..=0x7B => format!("F{}", self.0 - 0x70 + 1),
             0x20 => "Space".into(),
+            code if NAMED_KEYS.iter().any(|(_, c)| *c == code) => NAMED_KEYS
+                .iter()
+                .find(|(_, c)| *c == code)
+                .map(|(n, _)| (*n).to_string())
+                .unwrap_or_default(),
             other => format!("0x{other:02X}"),
         }
     }
@@ -27,6 +59,21 @@ impl FromStr for Key {
         match (chars.next(), chars.next()) {
             (Some(c), None) if c.is_ascii_alphanumeric() => Ok(Key(c as u32)),
             _ if upper == "SPACE" => Ok(Key(0x20)),
+            _ if NAMED_KEYS
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case(&upper)) =>
+            {
+                NAMED_KEYS
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(&upper))
+                    .map(|(_, c)| Key(*c))
+                    .ok_or_else(|| ShortcutError::UnknownKey(s.trim().to_string()))
+            }
+            _ if KEY_ALIASES.iter().any(|(n, _)| *n == upper) => KEY_ALIASES
+                .iter()
+                .find(|(n, _)| *n == upper)
+                .map(|(_, c)| Key(*c))
+                .ok_or_else(|| ShortcutError::UnknownKey(s.trim().to_string())),
             _ => match upper.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()) {
                 Some(n) if (1..=12).contains(&n) => Ok(Key(0x70 + n - 1)),
                 _ => Err(ShortcutError::UnknownKey(s.trim().to_string())),
@@ -48,7 +95,10 @@ impl fmt::Display for ShortcutError {
         match self {
             Self::Empty => write!(f, "the shortcut is empty"),
             Self::UnknownKey(k) => write!(f, "unknown key \"{k}\""),
-            Self::NeedsModifier => write!(f, "a shortcut needs at least one of Ctrl, Alt, Shift or Win"),
+            Self::NeedsModifier => write!(
+                f,
+                "a shortcut needs at least one of Ctrl, Alt, Shift or Win"
+            ),
             Self::BadRepeat(s) => write!(f, "expected one key or the same key twice, got \"{s}\""),
         }
     }
@@ -70,12 +120,20 @@ pub struct Shortcut {
 impl Shortcut {
     /// The default quick-access shortcut: Ctrl+C pressed twice.
     pub fn ctrl_c_c() -> Self {
-        Self { ctrl: true, alt: false, shift: false, win: false, key: Key(b'C' as u32), double: true }
+        Self {
+            ctrl: true,
+            alt: false,
+            shift: false,
+            win: false,
+            key: Key(b'C' as u32),
+            double: true,
+        }
     }
 
     /// The same modifiers and key, ignoring single or double.
     pub fn same_combo(&self, other: &Shortcut) -> bool {
-        (self.ctrl, self.alt, self.shift, self.win, self.key) == (other.ctrl, other.alt, other.shift, other.win, other.key)
+        (self.ctrl, self.alt, self.shift, self.win, self.key)
+            == (other.ctrl, other.alt, other.shift, other.win, other.key)
     }
 }
 
@@ -96,7 +154,14 @@ impl FromStr for Shortcut {
             [a, b] if a.eq_ignore_ascii_case(b) => (a.parse::<Key>()?, true),
             _ => return Err(ShortcutError::BadRepeat(last.to_string())),
         };
-        let mut shortcut = Shortcut { ctrl: false, alt: false, shift: false, win: false, key, double };
+        let mut shortcut = Shortcut {
+            ctrl: false,
+            alt: false,
+            shift: false,
+            win: false,
+            key,
+            double,
+        };
         for part in parts {
             match part.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => shortcut.ctrl = true,
@@ -116,13 +181,22 @@ impl FromStr for Shortcut {
 impl fmt::Display for Shortcut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut parts = Vec::new();
-        for (on, name) in [(self.ctrl, "Ctrl"), (self.alt, "Alt"), (self.shift, "Shift"), (self.win, "Win")] {
+        for (on, name) in [
+            (self.ctrl, "Ctrl"),
+            (self.alt, "Alt"),
+            (self.shift, "Shift"),
+            (self.win, "Win"),
+        ] {
             if on {
                 parts.push(name.to_string());
             }
         }
         let key = self.key.name();
-        parts.push(if self.double { format!("{key} {key}") } else { key });
+        parts.push(if self.double {
+            format!("{key} {key}")
+        } else {
+            key
+        });
         write!(f, "{}", parts.join("+"))
     }
 }
@@ -141,7 +215,10 @@ pub fn find_conflicts(list: &[(&str, Shortcut)]) -> Vec<Conflict> {
     for (i, (a_name, a)) in list.iter().enumerate() {
         for (b_name, b) in &list[i + 1..] {
             if a.same_combo(b) {
-                found.push(Conflict { first: a_name.to_string(), second: b_name.to_string() });
+                found.push(Conflict {
+                    first: a_name.to_string(),
+                    second: b_name.to_string(),
+                });
             }
         }
     }
@@ -152,7 +229,8 @@ pub fn find_conflicts(list: &[(&str, Shortcut)]) -> Vec<Conflict> {
 pub fn everyday_shortcut_warning(s: &Shortcut) -> Option<&'static str> {
     let only_ctrl = s.ctrl && !s.alt && !s.shift && !s.win;
     let letter = (s.key.0 as u8) as char;
-    (!s.double && only_ctrl && "CXVAZYSF".contains(letter)).then_some("this fires every time you use a standard editing shortcut")
+    (!s.double && only_ctrl && "CXVAZYSF".contains(letter))
+        .then_some("this fires every time you use a standard editing shortcut")
 }
 
 /// A shortcut other programs use for something. Owl-L only *observes* keys, it never takes them away, so the program in
@@ -202,7 +280,10 @@ const KNOWN: &[(&str, &str)] = &[
 
 /// Is this combination (single or double press, the same keys either way) a well-known shortcut of other programs?
 pub fn known_shortcut(s: &Shortcut) -> Option<KnownShortcut> {
-    KNOWN.iter().find(|(text, _)| text.parse::<Shortcut>().is_ok_and(|k| k.same_combo(s))).map(|(_, id)| KnownShortcut { id })
+    KNOWN
+        .iter()
+        .find(|(text, _)| text.parse::<Shortcut>().is_ok_and(|k| k.same_combo(s)))
+        .map(|(_, id)| KnownShortcut { id })
 }
 
 #[cfg(test)]
@@ -216,16 +297,43 @@ mod tests {
     #[test]
     fn parses_single_and_double_shortcuts() {
         let d = parse("Ctrl+C C");
-        assert_eq!((d.ctrl, d.alt, d.shift, d.win, d.key, d.double), (true, false, false, false, Key(0x43), true));
+        assert_eq!(
+            (d.ctrl, d.alt, d.shift, d.win, d.key, d.double),
+            (true, false, false, false, Key(0x43), true)
+        );
         let s = parse("ctrl + alt + t");
-        assert_eq!((s.ctrl, s.alt, s.key, s.double), (true, true, Key(0x54), false));
+        assert_eq!(
+            (s.ctrl, s.alt, s.key, s.double),
+            (true, true, Key(0x54), false)
+        );
         assert_eq!(parse("Win+Shift+F8").key, Key(0x77));
         assert_eq!(parse("Ctrl+Space").key, Key(0x20));
     }
 
     #[test]
+    fn print_screen_and_navigation_keys_work() {
+        let s = parse("Ctrl+Alt+PrintScreen");
+        assert_eq!(
+            (s.ctrl, s.alt, s.key, s.double),
+            (true, true, Key(0x2C), false)
+        );
+        assert_eq!(s.to_string(), "Ctrl+Alt+PrintScreen");
+        assert_eq!(parse("ctrl+alt+prtscn").to_string(), "Ctrl+Alt+PrintScreen");
+        assert_eq!(parse("Shift+Insert").key, Key(0x2D));
+        assert_eq!(parse("Alt+PageDown").to_string(), "Alt+PageDown");
+        assert_eq!(parse("Ctrl+Pause").key, Key(0x13));
+        assert!("Ctrl+Nonsense".parse::<Shortcut>().is_err());
+    }
+
+    #[test]
     fn displays_in_a_fixed_order_and_round_trips() {
-        for text in ["Ctrl+C C", "Ctrl+Alt+T", "Ctrl+Shift+Win+F8", "Alt+Space", "Shift+Z Z"] {
+        for text in [
+            "Ctrl+C C",
+            "Ctrl+Alt+T",
+            "Ctrl+Shift+Win+F8",
+            "Alt+Space",
+            "Shift+Z Z",
+        ] {
             assert_eq!(parse(text).to_string(), text);
         }
         assert_eq!(parse("shift+ctrl+c c").to_string(), "Ctrl+Shift+C C");
@@ -236,10 +344,22 @@ mod tests {
     fn rejects_bad_shortcuts() {
         assert_eq!("".parse::<Shortcut>(), Err(ShortcutError::Empty));
         assert_eq!("C".parse::<Shortcut>(), Err(ShortcutError::NeedsModifier));
-        assert!(matches!("Ctrl+C D".parse::<Shortcut>(), Err(ShortcutError::BadRepeat(_))));
-        assert!(matches!("Ctrl+Banana".parse::<Shortcut>(), Err(ShortcutError::BadRepeat(_) | ShortcutError::UnknownKey(_))));
-        assert!(matches!("Ctrl+F13".parse::<Shortcut>(), Err(ShortcutError::UnknownKey(_))));
-        assert!(matches!("Hyper+C".parse::<Shortcut>(), Err(ShortcutError::UnknownKey(_))));
+        assert!(matches!(
+            "Ctrl+C D".parse::<Shortcut>(),
+            Err(ShortcutError::BadRepeat(_))
+        ));
+        assert!(matches!(
+            "Ctrl+Banana".parse::<Shortcut>(),
+            Err(ShortcutError::BadRepeat(_) | ShortcutError::UnknownKey(_))
+        ));
+        assert!(matches!(
+            "Ctrl+F13".parse::<Shortcut>(),
+            Err(ShortcutError::UnknownKey(_))
+        ));
+        assert!(matches!(
+            "Hyper+C".parse::<Shortcut>(),
+            Err(ShortcutError::UnknownKey(_))
+        ));
     }
 
     #[test]
@@ -250,9 +370,18 @@ mod tests {
 
         // A single Ctrl+C is the first half of Ctrl+C C.
         let clash = find_conflicts(&[("translate", translate), ("capture", parse("Ctrl+C"))]);
-        assert_eq!(clash, vec![Conflict { first: "translate".into(), second: "capture".into() }]);
+        assert_eq!(
+            clash,
+            vec![Conflict {
+                first: "translate".into(),
+                second: "capture".into()
+            }]
+        );
         // Same combo twice, one single and one double press.
-        assert_eq!(find_conflicts(&[("a", parse("Alt+T T")), ("b", parse("Alt+T"))]).len(), 1);
+        assert_eq!(
+            find_conflicts(&[("a", parse("Alt+T T")), ("b", parse("Alt+T"))]).len(),
+            1
+        );
         // Different modifiers do not conflict.
         assert!(find_conflicts(&[("a", parse("Ctrl+T T")), ("b", parse("Alt+T T"))]).is_empty());
     }
@@ -267,14 +396,29 @@ mod tests {
 
     #[test]
     fn well_known_shortcuts_of_other_programs_are_recognized_single_or_double() {
-        assert_eq!(known_shortcut(&parse("Ctrl+L")).map(|k| k.id), Some("address"));
+        assert_eq!(
+            known_shortcut(&parse("Ctrl+L")).map(|k| k.id),
+            Some("address")
+        );
         // A double press still fires the other program's shortcut twice.
-        assert_eq!(known_shortcut(&parse("Ctrl+L L")).map(|k| k.id), Some("address"));
-        assert_eq!(known_shortcut(&parse("ctrl+shift+t t")).map(|k| k.id), Some("reopen"));
-        assert_eq!(known_shortcut(&parse("Win+V")).map(|k| k.id), Some("clipboard"));
+        assert_eq!(
+            known_shortcut(&parse("Ctrl+L L")).map(|k| k.id),
+            Some("address")
+        );
+        assert_eq!(
+            known_shortcut(&parse("ctrl+shift+t t")).map(|k| k.id),
+            Some("reopen")
+        );
+        assert_eq!(
+            known_shortcut(&parse("Win+V")).map(|k| k.id),
+            Some("clipboard")
+        );
         // Owl-L's own defaults are not on the list.
         for own in ["Ctrl+Shift+O", "Ctrl+Shift+L", "Ctrl+C C"] {
-            assert!(known_shortcut(&parse(own)).is_none() || own == "Ctrl+C C", "{own}");
+            assert!(
+                known_shortcut(&parse(own)).is_none() || own == "Ctrl+C C",
+                "{own}"
+            );
         }
         assert!(known_shortcut(&parse("Ctrl+Alt+L")).is_none());
         assert!(known_shortcut(&parse("Ctrl+F8")).is_none());
