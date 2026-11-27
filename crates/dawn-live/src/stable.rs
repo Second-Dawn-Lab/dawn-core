@@ -38,6 +38,14 @@ pub fn nearly_same(a: &str, b: &str) -> bool {
     distance <= (longest / 8).max(1)
 }
 
+/// The same lines read again: as many lines with as many words, each give or take what OCR gets wrong. (Comparing the whole
+/// text at once would miss a word added at the bottom of a large region.)
+fn same_screen(a: &str, b: &str) -> bool {
+    let lines = |s: &str| s.lines().filter(|l| !l.trim().is_empty()).count();
+    lines(a) == lines(b)
+        && a.lines().filter(|l| !l.trim().is_empty()).zip(b.lines().filter(|l| !l.trim().is_empty())).all(|(x, y)| x.split_whitespace().count() == y.split_whitespace().count() && nearly_same(x, y))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
     /// Not stable yet (or nothing new).
@@ -53,11 +61,11 @@ pub struct Stabilizer {
     last_read: Option<String>,
     /// How many reads in a row were the same as `last_read`.
     same_reads: u32,
-    /// When the text last became different, for the timeout.
-    changed_at: u64,
+    /// Since when there is text that was not passed on yet, for the timeout.
+    unsettled_since: Option<u64>,
     /// The text passed on last (until the captions clear).
     emitted: Option<String>,
-    /// Pass text on after this long even if it keeps changing a little.
+    /// Pass text on after this long even if it keeps changing (a caption that grows without a pause, moving video).
     pub timeout_ms: u64,
     /// Reads of empty text in a row (one empty read can be a missed frame).
     empty_reads: u32,
@@ -65,7 +73,7 @@ pub struct Stabilizer {
 
 impl Default for Stabilizer {
     fn default() -> Self {
-        Self { last_read: None, same_reads: 0, changed_at: 0, emitted: None, timeout_ms: 1500, empty_reads: 0 }
+        Self { last_read: None, same_reads: 0, unsettled_since: None, emitted: None, timeout_ms: 1500, empty_reads: 0 }
     }
 }
 
@@ -76,6 +84,7 @@ impl Stabilizer {
             self.empty_reads += 1;
             self.last_read = None;
             self.same_reads = 0;
+            self.unsettled_since = None;
             if self.empty_reads >= 2 && self.emitted.take().is_some() {
                 return Verdict::Cleared;
             }
@@ -83,25 +92,22 @@ impl Stabilizer {
         }
         self.empty_reads = 0;
         match &self.last_read {
-            Some(prev) if nearly_same(prev, text) => self.same_reads += 1,
-            _ => {
-                self.same_reads = 1;
-                self.changed_at = now_ms;
-            }
+            Some(prev) if same_screen(prev, text) => self.same_reads += 1,
+            _ => self.same_reads = 1,
         }
         self.last_read = Some(text.to_string());
 
-        let settled = self.same_reads >= 2 || now_ms.saturating_sub(self.changed_at) >= self.timeout_ms;
-        if !settled {
+        if self.emitted.as_deref().is_some_and(|done| same_screen(done, text)) {
+            self.unsettled_since = None;
             return Verdict::Wait;
         }
-        match &self.emitted {
-            Some(done) if nearly_same(done, text) => Verdict::Wait,
-            _ => {
-                self.emitted = Some(text.to_string());
-                Verdict::Stable(text.to_string())
-            }
+        let since = *self.unsettled_since.get_or_insert(now_ms);
+        if self.same_reads < 2 && now_ms.saturating_sub(since) < self.timeout_ms {
+            return Verdict::Wait;
         }
+        self.unsettled_since = None;
+        self.emitted = Some(text.to_string());
+        Verdict::Stable(text.to_string())
     }
 
     /// Start over (the region moved, the language changed).
@@ -156,6 +162,26 @@ mod tests {
             }
         }
         assert!(got.is_some(), "the timeout must pass the text on");
+    }
+
+    #[test]
+    fn a_short_word_added_below_many_lines_is_noticed() {
+        let above = (0..12).map(|i| format!("line number {i} of a long caption area")).collect::<Vec<_>>().join("\n");
+        let mut s = Stabilizer::default();
+        let first = format!("{above}\nand now");
+        s.observe(0, &first);
+        assert!(matches!(s.observe(500, &first), Verdict::Stable(_)));
+        let more = format!("{above}\nand now we");
+        s.observe(1000, &more);
+        assert!(matches!(s.observe(1500, &more), Verdict::Stable(_)));
+    }
+
+    #[test]
+    fn a_caption_that_grows_without_a_pause_is_passed_on_every_timeout() {
+        let words = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen".split(' ').collect::<Vec<_>>();
+        let mut s = Stabilizer::default();
+        let passed: Vec<u64> = (1..=words.len()).map(|n| (n as u64 * 400, words[..n].join(" "))).filter(|(at, text)| matches!(s.observe(*at, text), Verdict::Stable(_))).map(|(at, _)| at).collect();
+        assert!(passed.len() >= 2 && passed[0] <= 2400, "{passed:?}");
     }
 
     #[test]

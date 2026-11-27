@@ -1,10 +1,11 @@
 //! The steps of one look at the region, in one place, so the whole chain is tested (and measured) without a screen:
-//! change detection, black region, reading only when something changed, waiting for stable text, finding the new lines.
+//! change detection, black region, reading only when something changed, waiting for stable text, finding the new captions.
 
 use crate::change::{is_black, signature, BlackEvent, BlackWatch, ChangeDetector};
-use crate::lines::{split_lines, Delta, LineTracker};
-use crate::meeting::{parse_meeting, MeetingTracker, MeetingUpdate};
+use crate::lines::{split_lines, LineTracker};
+use crate::meeting::{parse_meeting, MeetingTracker};
 use crate::stable::{Stabilizer, Verdict};
+use crate::track::CaptionUpdate;
 
 /// What one look produced.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -15,12 +16,10 @@ pub struct Step {
     pub read: bool,
     /// The captions went away.
     pub cleared: bool,
-    /// New stable lines to translate, if any.
-    pub delta: Delta,
     /// How long nothing changed in the region, for the update rate.
     pub idle_ms: u64,
-    /// Meeting captions: the utterances that changed (translate them at once, the text is still growing), or ended.
-    pub updates: Vec<MeetingUpdate>,
+    /// The captions that are new or changed (translate them; a growing one comes again and again), or ended.
+    pub updates: Vec<CaptionUpdate>,
 }
 
 /// Whether the region holds meeting captions (a speaker name above the text).
@@ -116,26 +115,31 @@ impl Pipeline {
                 self.meeting_active = true;
             }
         }
-        if self.meeting_active() {
+        let meeting = self.meeting_active();
+        if meeting {
+            // A running plain caption (read before the first speaker name) is over.
+            step.updates = self.tracker.finish();
             // No waiting for the text to settle: every change of a growing line is passed on at once.
             let text = self.last_text.trim().to_string();
             if text.is_empty() {
-                step.updates = self.meeting.push_empty(now_ms);
-                step.cleared = !step.updates.is_empty();
+                let ended = self.meeting.push_empty(now_ms);
+                step.cleared = !ended.is_empty();
+                step.updates.extend(ended);
             } else {
-                step.updates = self.meeting.push(now_ms, &parse_meeting(&split_lines(&text)));
+                step.updates.extend(self.meeting.push(now_ms, &parse_meeting(&split_lines(&text))));
             }
             step.updates.extend(self.meeting.tick(now_ms));
             return step;
         }
         match self.stabilizer.observe(now_ms, &self.last_text) {
-            Verdict::Stable(text) => step.delta = self.tracker.push(&split_lines(&text)),
+            Verdict::Stable(text) => step.updates = self.tracker.push(now_ms, &split_lines(&text)),
             Verdict::Cleared => {
-                self.tracker.reset();
+                step.updates = self.tracker.clear();
                 step.cleared = true;
             }
             Verdict::Wait => {}
         }
+        step.updates.extend(self.tracker.tick(now_ms));
         step
     }
 }
@@ -169,7 +173,8 @@ mod tests {
     /// Plays a sequence of (caption picture, text the reader would return) and collects what the pipeline asks to translate.
     fn play(sequence: &[(usize, &str)], every_ms: u64) -> (Vec<String>, usize) {
         let mut pipeline = Pipeline::new();
-        let (mut translated, mut reads) = (Vec::new(), 0);
+        // The captions as the bar would show them: a new id is a new line, a known one changes its line.
+        let (mut shown, mut reads) = (Vec::<(u64, String)>::new(), 0);
         for (i, (picture, text)) in sequence.iter().enumerate() {
             let rgba = frame(*picture);
             let mut read = || {
@@ -177,14 +182,14 @@ mod tests {
                 Some(text.to_string())
             };
             let step = pipeline.step(i as u64 * every_ms, &rgba, W, H, &mut read);
-            for line in step.delta.lines {
-                if step.delta.replace_last {
-                    translated.pop();
+            for u in step.updates {
+                match shown.iter_mut().find(|(id, _)| *id == u.id) {
+                    Some(line) => line.1 = u.text,
+                    None => shown.push((u.id, u.text)),
                 }
-                translated.push(line);
             }
         }
-        (translated, reads)
+        (shown.into_iter().map(|(_, text)| text).collect(), reads)
     }
 
     #[test]
@@ -210,7 +215,7 @@ mod tests {
             (3, "x"),
         ];
         let (lines, reads) = play(&seq, 400);
-        assert_eq!(lines, ["We will begin with", "the quarterly report.", "Please open page four.", "Questions are welcome."]);
+        assert_eq!(lines, ["We will begin with the quarterly report.", "Please open page four.", "Questions are welcome."]);
         assert_eq!(reads, 3);
     }
 
@@ -252,7 +257,7 @@ mod tests {
         let mut pipeline = Pipeline::new();
         let rgba = frame(1);
         let step = pipeline.step(0, &rgba, W, H, &mut || None);
-        assert!(step.read && step.delta.is_empty());
+        assert!(step.read && step.updates.is_empty());
         pipeline.reset();
         let step = pipeline.step(500, &rgba, W, H, &mut || Some("Hello there".into()));
         assert!(step.read);
@@ -260,7 +265,7 @@ mod tests {
 
     // --- meeting captions ---
 
-    fn meeting_play(mode: MeetingMode, sequence: &[(usize, &str)], every_ms: u64) -> Vec<(u64, Vec<MeetingUpdate>)> {
+    fn meeting_play(mode: MeetingMode, sequence: &[(usize, &str)], every_ms: u64) -> Vec<(u64, Vec<CaptionUpdate>)> {
         let mut pipeline = Pipeline::new();
         pipeline.set_meeting_mode(mode);
         sequence
@@ -306,11 +311,11 @@ Yes."), (1, "x"), (1, "x"), (1, "x"), (1, "x")];
     fn plain_subtitles_are_not_taken_for_a_meeting_in_auto_mode_and_off_never_is() {
         let seq = [(1, "We will begin with
 the quarterly report."), (1, "x"), (1, "x")];
-        assert!(meeting_play(MeetingMode::Auto, &seq, 400).iter().all(|(_, u)| u.is_empty()));
+        assert!(meeting_play(MeetingMode::Auto, &seq, 400).iter().flat_map(|(_, u)| u).all(|u| u.speaker.is_none() && u.id > u32::MAX as u64), "plain captions");
         let named = [(1, "AK
 Anna Keller
 We start now.")];
-        assert!(meeting_play(MeetingMode::Off, &named, 400).iter().all(|(_, u)| u.is_empty()));
+        assert!(meeting_play(MeetingMode::Off, &named, 400).iter().flat_map(|(_, u)| u).all(|u| u.speaker.is_none()));
         assert_eq!(meeting_play(MeetingMode::On, &seq[..1], 400)[0].1.len(), 1, "On follows any text word by word");
     }
 

@@ -1,17 +1,18 @@
 //! Meeting captions (Teams, Zoom, Meet): the caption area shows an avatar with initials, a speaker name and one or two lines
-//! of text, and the newest line keeps growing while someone speaks. Plain subtitle logic (wait for the text to settle,
-//! translate lines once) lags behind that. This module
+//! of text for each dialog, and the newest dialog keeps growing while someone speaks, pushing the older ones up. Plain
+//! subtitle logic (wait for the text to settle) lags behind that. This module
 //!
 //! * reads the layout: [`parse_meeting`] splits the recognized lines into blocks of one speaker each, leaving out the
 //!   initials of the avatar, and keeps the speaker name apart from the text (a name is never translated or mixed into a
 //!   sentence);
-//! * follows what each speaker says: [`MeetingTracker`] gives every utterance an id, grows its text as the caption grows
-//!   (also when the first words scroll out of the caption box), and reports an update at once for every change, so the
-//!   translation can follow the speaker word by word. An utterance is finished when another speaker starts, when it
-//!   scrolls away, or after a pause.
+//! * follows what each speaker says: [`MeetingTracker`] gives every dialog (utterance) an id, recognizes it by its words
+//!   wherever it moves (see [`crate::track`]), grows its text as the caption grows (also when the first words scroll out
+//!   of the caption box), and reports an update at once for every change, so the translation can follow the speaker word
+//!   by word. An utterance is finished when it moves up, another one follows, or after a pause; a later correction of its
+//!   words updates it in place.
 
 use crate::lines::split_lines;
-use crate::stable::{nearly_same, similarity};
+use crate::track::{align, common_words, corrected, key, keys, same_word, CaptionUpdate, Item, HISTORY};
 
 /// One speaker's caption.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,6 +127,8 @@ pub fn parse_meeting(lines: &[String]) -> Vec<Block> {
             blocks.push(std::mem::replace(current, Block { speaker: None, lines: Vec::new() }));
         }
     };
+    // The names on screen: their initials are avatars, wherever the reading order put them.
+    let names: Vec<&str> = lines.iter().map(|l| l.trim()).filter(|l| looks_like_name(l, false) && !is_label(l)).collect();
     for (i, raw) in lines.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() || is_noise(line) {
@@ -145,7 +148,7 @@ pub fn parse_meeting(lines: &[String]) -> Vec<Block> {
                 after_initials = true;
                 continue;
             }
-            if current.speaker.as_deref().is_some_and(|n| matches_initials(line, n)) {
+            if line.chars().count() > 1 && (current.speaker.as_deref().is_some_and(|n| matches_initials(line, n)) || names.iter().any(|n| matches_initials(line, n))) {
                 continue;
             }
         }
@@ -178,79 +181,87 @@ pub fn parse_meeting_text(text: &str) -> Vec<Block> {
 
 // --- following what is said --------------------------------------------------------
 
-/// A change of an utterance, to translate and show.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MeetingUpdate {
-    pub id: u64,
-    pub speaker: Option<String>,
-    pub text: String,
-    /// The utterance is over: its translation can be polished.
-    pub finished: bool,
-}
-
 #[derive(Debug, Clone)]
 struct Utterance {
     id: u64,
     speaker: Option<String>,
     words: Vec<String>,
+    /// `words` as they are compared.
+    keys: Vec<String>,
     last_change_ms: u64,
     finished: bool,
+    /// It was the bottom block of the last read: the one being spoken.
+    at_bottom: bool,
+    /// Another reading of it that waits to be seen once more before it is believed.
+    pending: Option<Vec<String>>,
 }
 
 impl Utterance {
-    fn update(&self) -> MeetingUpdate {
-        MeetingUpdate { id: self.id, speaker: self.speaker.clone(), text: self.words.join(" "), finished: self.finished }
+    fn update(&self) -> CaptionUpdate {
+        CaptionUpdate { id: self.id, speaker: self.speaker.clone(), text: self.words.join(" "), finished: self.finished }
     }
-}
 
-fn same_word(old: &str, new: &str) -> bool {
-    let (a, b) = (old.to_lowercase(), new.to_lowercase());
-    a == b || (a.chars().count() >= 4 && nearly_same(&a, &b))
+    fn set(&mut self, mut words: Vec<String>, now_ms: u64) {
+        if words.len() > MAX_WORDS {
+            words.drain(..words.len() - MAX_WORDS);
+        }
+        self.keys = keys(&words);
+        self.words = words;
+        self.last_change_ms = now_ms;
+        self.pending = None;
+    }
+
+    /// True the second time in a row the same other reading is seen.
+    fn confirmed(&mut self, words: &[String]) -> bool {
+        if self.pending.as_deref().is_some_and(|p| keys(p) == keys(words)) {
+            return true;
+        }
+        self.pending = Some(words.to_vec());
+        false
+    }
 }
 
 /// The most words of an utterance that are kept.
 const MAX_WORDS: usize = 300;
 
-/// The utterance after the caption showed `new`, or `None` when `new` is another utterance. The end of `old` that the
-/// start of `new` repeats is where the caption continues (the caption box scrolls: its first words are gone); the last old
-/// word may be cut off (a word that was still being read).
-fn merge(old: &[String], new: &[String]) -> Option<Vec<String>> {
-    if old.is_empty() {
-        return Some(new.to_vec());
-    }
-    for k in (1..=old.len().min(new.len())).rev() {
-        if k < old.len().min(2) {
-            break;
-        }
-        let tail = &old[old.len() - k..];
-        let all = tail.iter().zip(&new[..k]).enumerate().all(|(i, (o, n))| same_word(o, n) || (i + 1 == k && k == old.len() && n.to_lowercase().starts_with(&o.to_lowercase())));
-        if all {
-            let mut merged = old[..old.len() - k].to_vec();
-            merged.extend_from_slice(new);
-            if merged.len() > MAX_WORDS {
-                merged.drain(..merged.len() - MAX_WORDS);
-            }
-            return Some(merged);
-        }
-    }
-    // The same text read again with a few differences.
-    if similarity(&old.join(" "), &new.join(" ")) >= 0.7 {
-        return Some(new.to_vec());
-    }
-    None
+/// The utterance after the caption showed `new` for it. In the top block of the area the first words may have scrolled
+/// out: the old words before the place where `new` begins are kept.
+fn merge(old: &[String], new: &[String], top: bool) -> Vec<String> {
+    let mut merged = if top { old[..scrolled_out(old, new)].to_vec() } else { Vec::new() };
+    merged.extend_from_slice(new);
+    merged
 }
 
-fn speaker_compatible(old: &Option<String>, new: &Option<String>) -> bool {
-    match (old, new) {
-        (Some(a), Some(b)) => nearly_same(a, b),
-        _ => true,
+/// How many words at the start of `old` are above what `new` shows.
+fn scrolled_out(old: &[String], new: &[String]) -> usize {
+    let lower = |w: &[String]| w.iter().map(|w| key(w)).collect::<Vec<_>>();
+    let (old, new) = (lower(old), lower(new));
+    // The caption goes on where the end of the old words is the start of the new ones.
+    for k in (old.len().min(2)..=old.len().min(new.len())).rev() {
+        if k > 0 && old[old.len() - k..].iter().zip(&new[..k]).all(|(o, n)| same_word(o, n)) {
+            return old.len() - k;
+        }
     }
+    // Some words were corrected: the distance most of the shared words have moved.
+    let mut moved = std::collections::BTreeMap::new();
+    for (i, j) in common_words(&old, &new) {
+        *moved.entry(i as isize - j as isize).or_insert(0usize) += 1;
+    }
+    moved.into_iter().max_by_key(|&(_, count)| count).filter(|&(distance, count)| distance > 0 && count >= 2).map_or(0, |(distance, _)| distance as usize)
+}
+
+/// `new` is `old` with words missing.
+fn shrunk(old: &[String], new: &[String]) -> bool {
+    new.len() < old.len() && common_words(old, new).len() == new.len()
 }
 
 /// Follows the utterances of a meeting. Feed it the blocks of every read; it says what changed.
 #[derive(Debug, Clone)]
 pub struct MeetingTracker {
-    recent: Vec<Utterance>,
+    /// The conversation so far, oldest first (the latest [`HISTORY`] utterances).
+    said: Vec<Utterance>,
+    /// Utterances before this index were on screen before the captions went away.
+    floor: usize,
     next_id: u64,
     empty_reads: u32,
     /// An utterance with no change for this long is finished.
@@ -259,84 +270,120 @@ pub struct MeetingTracker {
 
 impl Default for MeetingTracker {
     fn default() -> Self {
-        Self { recent: Vec::new(), next_id: 1, empty_reads: 0, pause_ms: 1800 }
+        Self { said: Vec::new(), floor: 0, next_id: 1, empty_reads: 0, pause_ms: 1800 }
     }
 }
 
 impl MeetingTracker {
     pub fn reset(&mut self) {
-        self.recent.clear();
+        self.said.clear();
+        self.floor = 0;
         self.empty_reads = 0;
     }
 
-    /// The blocks of one read. The last block is the one being spoken; the ones above it are over.
-    pub fn push(&mut self, now_ms: u64, blocks: &[Block]) -> Vec<MeetingUpdate> {
+    /// The blocks of one read, top to bottom. The last block is the one being spoken; the ones above it are over.
+    pub fn push(&mut self, now_ms: u64, blocks: &[Block]) -> Vec<CaptionUpdate> {
         self.empty_reads = 0;
-        let mut out = Vec::new();
-        let live = blocks.len().saturating_sub(1);
-        for (n, block) in blocks.iter().enumerate() {
-            let words: Vec<String> = block.text().split_whitespace().map(str::to_string).collect();
-            if words.is_empty() {
-                continue;
+        let blocks: Vec<(Option<&str>, Vec<String>, Vec<String>)> = blocks
+            .iter()
+            .map(|b| {
+                let words: Vec<String> = b.text().split_whitespace().map(str::to_string).collect();
+                (b.speaker.as_deref(), keys(&words), words)
+            })
+            .filter(|(_, k, _)| !k.is_empty())
+            .collect();
+        if blocks.is_empty() {
+            return Vec::new();
+        }
+        let places = {
+            let known: Vec<Item> = self.said.iter().map(|u| Item { speaker: u.speaker.as_deref(), words: &u.keys }).collect();
+            let seen: Vec<Item> = blocks.iter().map(|(speaker, k, _)| Item { speaker: *speaker, words: k }).collect();
+            align(&known, &seen, self.floor, self.said.last().is_some_and(|u| u.at_bottom))
+        };
+        let bottom = blocks.len() - 1;
+        // New utterances are the unknown blocks below everything that is known: captions only appear at the bottom.
+        let first_new = places.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+        let was_at_bottom: Vec<bool> = self.said.iter().map(|u| u.at_bottom).collect();
+        self.said.iter_mut().for_each(|u| u.at_bottom = false);
+        let newest = self.said.len().wrapping_sub(1);
+        // What changed, by position in the conversation.
+        let mut changed = std::collections::BTreeSet::new();
+        for (n, place) in places.iter().enumerate() {
+            let Some(j) = *place else { continue };
+            let (speaker, _, words) = &blocks[n];
+            let u = &mut self.said[j];
+            let merged = merge(&u.words, words, n == 0);
+            let merged_keys = keys(&merged);
+            if merged_keys == u.keys {
+                u.pending = None;
+            } else if n == bottom && j == newest {
+                // The speaker goes on (or the app rewrote the words). Words that went missing are believed on the second look.
+                if !shrunk(&u.keys, &merged_keys) || u.confirmed(&merged) {
+                    u.set(merged, now_ms);
+                    u.finished = false;
+                    changed.insert(j);
+                }
+            } else {
+                // Moved up. At the very top a line can be half gone: that is not a correction.
+                let cut = n == 0 && (merged.len() < u.words.len() || merged_keys.first() != u.keys.first());
+                // The words that arrived while it moved up are taken at once; a later correction on the second look.
+                let last_words = was_at_bottom[j] && merged.len() >= u.words.len();
+                // Words that are only missing were not read, not corrected.
+                if !cut && (last_words || (!shrunk(&u.keys, &merged_keys) && corrected(&u.words, &merged) && u.confirmed(&merged))) {
+                    u.set(merged, now_ms);
+                    changed.insert(j);
+                }
             }
-            let found = self.recent.iter().enumerate().rev().find_map(|(i, u)| (speaker_compatible(&u.speaker, &block.speaker)).then(|| merge(&u.words, &words).map(|m| (i, m))).flatten());
+            if u.speaker.is_none() {
+                u.speaker = speaker.map(str::to_string);
+            }
+            u.at_bottom = n == bottom;
+            if n != bottom && !u.finished {
+                u.finished = true;
+                changed.insert(j);
+            }
+        }
+        for (n, (speaker, k, words)) in blocks.iter().enumerate().skip(first_new) {
             // Left-overs of an earlier utterance at the top of the caption box (its first line cut off, no name) are not new.
-            if found.is_none() && n < live && block.speaker.is_none() {
+            if n < bottom && speaker.is_none() {
                 continue;
             }
-            let index = match found {
-                Some((i, merged)) => {
-                    let u = &mut self.recent[i];
-                    if u.words != merged && !u.finished {
-                        u.words = merged;
-                        u.last_change_ms = now_ms;
-                        out.push(u.update());
-                    }
-                    if u.speaker.is_none() {
-                        u.speaker = block.speaker.clone();
-                    }
-                    i
-                }
-                None => {
-                    // Another utterance: whatever was running is over.
-                    self.finish_all(&mut out);
-                    let u = Utterance { id: self.next_id, speaker: block.speaker.clone(), words, last_change_ms: now_ms, finished: false };
-                    self.next_id += 1;
-                    out.push(u.update());
-                    self.recent.push(u);
-                    if self.recent.len() > 6 {
-                        self.recent.remove(0);
-                    }
-                    self.recent.len() - 1
-                }
-            };
-            if n < live {
-                // A block above the live one has scrolled up: it is over.
-                let u = &mut self.recent[index];
+            // Another utterance: whatever was running is over.
+            for (j, u) in self.said.iter_mut().enumerate() {
                 if !u.finished {
                     u.finished = true;
-                    out.push(u.update());
+                    changed.insert(j);
                 }
             }
+            changed.insert(self.said.len());
+            self.said.push(Utterance { id: self.next_id, speaker: speaker.map(str::to_string), words: words.clone(), keys: k.clone(), last_change_ms: now_ms, finished: n < bottom, at_bottom: n == bottom, pending: None });
+            self.next_id += 1;
+        }
+        let out = changed.into_iter().map(|j| self.said[j].update()).collect();
+        if self.said.len() > HISTORY {
+            let gone = self.said.len() - HISTORY;
+            self.said.drain(..gone);
+            self.floor = self.floor.saturating_sub(gone);
         }
         out
     }
 
-    /// A read with no caption text. Two in a row end the running utterance; the same words later are a new one.
-    pub fn push_empty(&mut self, _now_ms: u64) -> Vec<MeetingUpdate> {
+    /// A read with no caption text. Two in a row end the running utterance; the same short words later are a new one.
+    pub fn push_empty(&mut self, _now_ms: u64) -> Vec<CaptionUpdate> {
         self.empty_reads += 1;
         let mut out = Vec::new();
         if self.empty_reads >= 2 {
             self.finish_all(&mut out);
-            self.recent.clear();
+            self.floor = self.said.len();
+            self.said.iter_mut().for_each(|u| u.at_bottom = false);
         }
         out
     }
 
     /// Time passes: an utterance that has not changed for `pause_ms` is finished.
-    pub fn tick(&mut self, now_ms: u64) -> Vec<MeetingUpdate> {
+    pub fn tick(&mut self, now_ms: u64) -> Vec<CaptionUpdate> {
         let mut out = Vec::new();
-        for u in &mut self.recent {
+        for u in &mut self.said {
             if !u.finished && now_ms.saturating_sub(u.last_change_ms) >= self.pause_ms {
                 u.finished = true;
                 out.push(u.update());
@@ -345,8 +392,8 @@ impl MeetingTracker {
         out
     }
 
-    fn finish_all(&mut self, out: &mut Vec<MeetingUpdate>) {
-        for u in &mut self.recent {
+    fn finish_all(&mut self, out: &mut Vec<CaptionUpdate>) {
+        for u in &mut self.said {
             if !u.finished {
                 u.finished = true;
                 out.push(u.update());
@@ -405,6 +452,14 @@ mod tests {
     }
 
     #[test]
+    fn the_initials_of_another_speaker_read_between_the_lines_are_not_text() {
+        let b = parse_meeting(&lines(&["Anna Keller", "We start with the budget.", "BL", "AK", "Bo Lindqvist", "Fine with me."]));
+        assert_eq!((b[0].text().as_str(), b[1].text().as_str()), ("We start with the budget.", "Fine with me."), "{b:?}");
+        let b = parse_meeting(&lines(&["Anna Keller", "We start with the budget.", "Bo Lindqvist", "Fine with me.", "AK", "BL"]));
+        assert_eq!(b[1].text(), "Fine with me.", "{b:?}");
+    }
+
+    #[test]
     fn several_blocks_of_the_same_speaker_one_below_the_other_are_separate_utterances() {
         let screen = lines(&["Mit dem Test dann wohl da.", "Anna Keller", "AK Das erste Stück.", "Anna Keller", "AK Das zweite.", "Anna Keller", "AK Das dritte"]);
         let blocks = parse_meeting(&screen);
@@ -414,7 +469,7 @@ mod tests {
         let mut t = MeetingTracker::default();
         let first = t.push(0, &blocks);
         // The last state of every utterance: the ones above are over, only the last block is being spoken.
-        let mut last: std::collections::BTreeMap<u64, &MeetingUpdate> = std::collections::BTreeMap::new();
+        let mut last: std::collections::BTreeMap<u64, &CaptionUpdate> = std::collections::BTreeMap::new();
         for u in &first {
             last.insert(u.id, u);
         }
@@ -470,7 +525,7 @@ mod tests {
     fn a_growing_line_is_one_utterance_updated_at_every_change_without_waiting() {
         let mut t = MeetingTracker::default();
         let first = t.push(0, &block("Anna Keller", "We should"));
-        assert_eq!(first, [MeetingUpdate { id: 1, speaker: Some("Anna Keller".into()), text: "We should".into(), finished: false }]);
+        assert_eq!(first, [CaptionUpdate { id: 1, speaker: Some("Anna Keller".into()), text: "We should".into(), finished: false }]);
         let second = t.push(400, &block("Anna Keller", "We should look at the"));
         assert_eq!((second.len(), second[0].id, second[0].text.as_str()), (1, 1, "We should look at the"));
         assert!(t.push(500, &block("Anna Keller", "We should look at the")).is_empty(), "no change, no update");

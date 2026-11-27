@@ -14,7 +14,7 @@ turned Quality mode on. Off by default, nothing is loaded at app start, and noth
 | **Alternatives** | A click on a word asks the model for 8 other words for that position (`prompts::alternatives`), cleaned and deduplicated; the sentence is the old one with the word swapped. Any failure falls back to the CTranslate2 list. |
 | **Documents** | `EngineTranslator::with_polish` polishes every translated text unit after the engine; the same cancel flag stops it. The editor has "Polish this segment" and "Polish all" (`quality_polish_text`). A model that cannot run ends the polishing for the rest of the document and says so (`doc-polish-stopped`). |
 | **Write tab** | `WriteKind`: Improve, Shorter, More formal, More casual, Fix grammar. The answer is diffed word by word (`diff.rs`, LCS on words and whitespace); every change can be accepted or undone. |
-| **Live captions** | Off by default; only in Calm speed and only when the model is already loaded (otherwise it loads in the background for the next line). 2.5 s budget per line, then the fast line stays. |
+| **Live captions** | Off by default. A finished caption (plain subtitles: only in Calm speed) is polished in the background when the model is already loaded (otherwise it loads for the next one). 8 s budget; the fast line stays until then, and for good if the model does not answer in time. |
 
 ## Output is never trusted (`validate.rs`)
 
